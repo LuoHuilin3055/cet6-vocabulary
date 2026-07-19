@@ -69,6 +69,7 @@ export default function Home() {
   const [overlay, setOverlay] = useState(38);
   const [blur, setBlur] = useState(0);
   const uploadRef = useRef<HTMLInputElement>(null);
+  const appRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     fetch("./words.json").then((response) => response.json()).then(setWords);
@@ -109,6 +110,10 @@ export default function Home() {
   useEffect(() => {
     if (mode === "spelling") Promise.resolve().then(() => setSpellingInput(record?.userAnswer || ""));
   }, [currentId, mode, scope, record?.userAnswer]);
+
+  useEffect(() => {
+    if (view === "practice" && mode === "choice") appRef.current?.focus();
+  }, [view, mode, currentId]);
 
   const updateQuiz = (change: (next: QuizStore) => void) => {
     const next = structuredClone(quiz);
@@ -260,7 +265,43 @@ export default function Home() {
     setBackground(await saveBackground());
   };
 
-  return <main className="app-shell">
+  const handleKeyboard = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const key = event.key.toLowerCase();
+    if (showNumbers) {
+      if (key === "escape") {
+        event.preventDefault();
+        setShowNumbers(false);
+      }
+      return;
+    }
+    if (view !== "practice") return;
+    const target = event.target as HTMLElement;
+    const typing = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT";
+    if (!typing && mode === "choice" && !record?.showAnswer && !record?.correct) {
+      const letters = ["a", "b", "c", "d"];
+      const optionIndex = /^[1-4]$/.test(key) ? Number(key) - 1 : letters.indexOf(key);
+      if (optionIndex >= 0 && choiceOptions[optionIndex]) {
+        event.preventDefault();
+        chooseAnswer(choiceOptions[optionIndex]);
+        return;
+      }
+    }
+    if (typing) return;
+    if (key === "arrowleft" && currentIndex > 0) {
+      event.preventDefault();
+      moveTo(source[currentIndex - 1]);
+    } else if (key === "arrowright" && currentIndex < source.length - 1) {
+      event.preventDefault();
+      moveTo(source[currentIndex + 1]);
+    } else if (key === "n") {
+      event.preventDefault();
+      setNumberPage(Math.floor(currentIndex / NUMBER_PAGE_SIZE));
+      setShowNumbers(true);
+    }
+  };
+
+  return <main ref={appRef} tabIndex={-1} className="app-shell" onKeyDown={handleKeyboard}>
     {background && <div className="custom-background" style={{ backgroundImage: `url(${background})`, filter: `blur(${blur}px) scale(1.03)` }} />}
     {background && <div className="background-overlay" style={{ opacity: overlay / 100 }} />}
     <aside className="sidebar">
@@ -291,11 +332,11 @@ export default function Home() {
       {view === "practice" && current && <section className="study-view">
         <header className="page-head"><button onClick={() => setView(scope === "review" ? "wrong" : "home")}>← {scope === "review" ? "返回错题本" : "返回首页"}</button><span>{scope === "review" ? "错题复习" : "普通学习"} · {mode === "choice" ? "选择题" : "拼写题"}</span></header>
         <div className="study-progress"><i style={{ width: `${(currentIndex + 1) / Math.max(source.length, 1) * 100}%` }} /></div>
-        <div className="question-toolbar"><button disabled={currentIndex === 0} onClick={() => moveTo(source[currentIndex - 1])}>← 上一题</button><button className="number-trigger" onClick={() => { setNumberPage(Math.floor(currentIndex / NUMBER_PAGE_SIZE)); setShowNumbers(true); }}>题号 {current.id} <small>/ {words.length}</small>⌄</button><button disabled={currentIndex === source.length - 1} onClick={() => moveTo(source[currentIndex + 1])}>下一题 →</button></div>
+        <div className="question-toolbar"><button title="上一题（←）" disabled={currentIndex === 0} onClick={() => moveTo(source[currentIndex - 1])}>← 上一题</button><button className="number-trigger" title="选择题号（N）" onClick={() => { setNumberPage(Math.floor(currentIndex / NUMBER_PAGE_SIZE)); setShowNumbers(true); }}>题号 {current.id} <small>/ {words.length}</small>⌄</button><button title="下一题（→）" disabled={currentIndex === source.length - 1} onClick={() => moveTo(source[currentIndex + 1])}>下一题 →</button></div>
         <article className="flashcard">
           <p className="prompt-label">{mode === "choice" ? "点击选项立即判断" : "输入英文后按 Enter 判断"}</p>
           <h2>{mode === "choice" ? current.word : current.meaning}</h2>
-          {mode === "choice" ? <div className="choice-grid">{choiceOptions.map((item) => <button key={item.word} disabled={Boolean(record?.showAnswer || record?.correct)} className={answerClass(item)} onClick={() => chooseAnswer(item)}>{item.meaning}</button>)}</div> : <><input className="spelling-input" disabled={Boolean(record?.correct)} value={spellingInput} onChange={(event) => setSpellingInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitSpelling()} placeholder={record?.showAnswer ? "再次按 Enter 重新拼写" : "输入英文单词"} autoComplete="off" autoCapitalize="none" spellCheck={false} /><p className="enter-tip">{record?.showAnswer ? "再次按 Enter 隐藏答案并重新作答" : "按 Enter 键判断正误"}</p></>}
+          {mode === "choice" ? <><div className="choice-grid">{choiceOptions.map((item, optionIndex) => <button key={item.word} disabled={Boolean(record?.showAnswer || record?.correct)} className={answerClass(item)} onClick={() => chooseAnswer(item)}><kbd>{String.fromCharCode(65 + optionIndex)}</kbd><span>{item.meaning}</span></button>)}</div><p className="keyboard-tip">键盘可按 A–D 或 1–4 作答</p></> : <><input className="spelling-input" disabled={Boolean(record?.correct)} value={spellingInput} onChange={(event) => setSpellingInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitSpelling()} placeholder={record?.showAnswer ? "再次按 Enter 重新拼写" : "输入英文单词"} autoComplete="off" autoCapitalize="none" spellCheck={false} /><p className="enter-tip">{record?.showAnswer ? "再次按 Enter 隐藏答案并重新作答" : "按 Enter 键判断正误"}</p></>}
           {record?.showAnswer && <div className="answer-result incorrect"><strong>回答错误</strong><span>正确答案：{mode === "choice" ? current.meaning : current.word}</span>{mode === "choice" && scope === "review" && <button onClick={retryChoice}>重新作答</button>}</div>}
           {record?.correct && <div className={`saved-result ${record.everWrong ? "corrected" : "correct"}`}>{record.everWrong ? "曾答错，现已答对" : "回答正确"}</div>}
         </article>
