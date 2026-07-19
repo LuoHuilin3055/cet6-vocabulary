@@ -34,9 +34,10 @@ test("a corrected word does not count while it remains in either wrong book", ()
 
 test("answer attempts accumulate daily and per-word statistics", () => {
   const store = emptyQuizStore();
-  recordAttempt(store, "battery", false);
-  recordAttempt(store, "battery", true);
+  recordAttempt(store, 2, "battery", false);
+  recordAttempt(store, 2, "battery", true);
   assert.deepEqual(store.statistics.words.battery, { answered: 2, correct: 1, wrong: 1 });
+  assert.deepEqual(store.statistics.questions["2"], { answered: 2, correct: 1, wrong: 1 });
   assert.deepEqual(store.statistics.daily[store.daily.date], { answered: 2, correct: 1, wrong: 1 });
 });
 

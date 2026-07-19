@@ -30,6 +30,7 @@ export type QuizStore = {
   statistics: {
     daily: Record<string, { answered: number; correct: number; wrong: number }>;
     words: Record<string, { answered: number; correct: number; wrong: number }>;
+    questions: Record<string, { answered: number; correct: number; wrong: number }>;
   };
   mastery: {
     choice: string[];
@@ -59,7 +60,7 @@ export function emptyQuizStore(): QuizStore {
     },
     daily: { date: todayKey(), choiceCorrect: [], spellingCorrect: [] },
     spellingReview: { completedThisRound: [], passedRounds: {} },
-    statistics: { daily: {}, words: {} },
+    statistics: { daily: {}, words: {}, questions: {} },
     mastery: { choice: [], spelling: [], completedOn: {} },
   };
 }
@@ -98,7 +99,11 @@ export function loadQuizStore(): QuizStore {
       },
       daily: parsed.daily || fallback.daily,
       spellingReview: parsed.spellingReview || fallback.spellingReview,
-      statistics: parsed.statistics || fallback.statistics,
+      statistics: {
+        daily: parsed.statistics?.daily || {},
+        words: parsed.statistics?.words || {},
+        questions: parsed.statistics?.questions || {},
+      },
       mastery: parsed.mastery || fallback.mastery,
     };
     if (store.daily.date !== todayKey()) store.daily = fallback.daily;
@@ -165,19 +170,24 @@ export function shouldRemoveSpellingWrong(passedRounds: number, roundWrong: bool
   return passedRounds >= 1 && !roundWrong;
 }
 
-export function recordAttempt(store: QuizStore, word: string, correct: boolean) {
+export function recordAttempt(store: QuizStore, questionId: number, word: string, correct: boolean) {
   const date = store.daily.date;
   const daily = store.statistics.daily[date] || { answered: 0, correct: 0, wrong: 0 };
   const wordStats = store.statistics.words[word] || { answered: 0, correct: 0, wrong: 0 };
+  const questionStats = store.statistics.questions[String(questionId)] || { answered: 0, correct: 0, wrong: 0 };
   daily.answered += 1;
   wordStats.answered += 1;
+  questionStats.answered += 1;
   if (correct) {
     daily.correct += 1;
     wordStats.correct += 1;
+    questionStats.correct += 1;
   } else {
     daily.wrong += 1;
     wordStats.wrong += 1;
+    questionStats.wrong += 1;
   }
   store.statistics.daily[date] = daily;
   store.statistics.words[word] = wordStats;
+  store.statistics.questions[String(questionId)] = questionStats;
 }
