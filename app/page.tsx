@@ -1,23 +1,27 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  addWrong,
+  dailyCompletedCount,
+  emptyQuizStore,
+  loadQuizStore,
+  markDailyCorrect,
+  QuizMode,
+  QuizScope,
+  QuizStore,
+  removeWrong,
+  saveQuizStore,
+  todayKey,
+} from "./quiz-storage";
 
 type Word = { id: number; word: string; meaning: string };
-type Mark = "known" | "fuzzy" | "unknown";
-type Mode = "choice" | "spelling";
 type Theme = "light" | "dark" | "system";
-type View = "home" | "study" | "wrong" | "words" | "settings";
-type Progress = Record<string, { mark: Mark; seen: number; updated: number }>;
+type View = "home" | "practice" | "wrong" | "words" | "settings";
 
-const PROGRESS_KEY = "cet6-progress-v1";
 const SETTINGS_KEY = "cet6-settings-v1";
-const DAILY_KEY = "cet6-daily-v1";
 const BG_DB = "cet6-background";
-
-function todayKey() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-}
+const NUMBER_PAGE_SIZE = 100;
 
 function saveBackground(file?: File): Promise<string | null> {
   return new Promise((resolve, reject) => {
@@ -26,9 +30,9 @@ function saveBackground(file?: File): Promise<string | null> {
     request.onerror = () => reject(request.error);
     request.onsuccess = () => {
       const tx = request.result.transaction("images", "readwrite");
-      const store = tx.objectStore("images");
-      if (file) store.put(file, "background");
-      else store.delete("background");
+      const images = tx.objectStore("images");
+      if (file) images.put(file, "background");
+      else images.delete("background");
       tx.oncomplete = () => resolve(file ? URL.createObjectURL(file) : null);
       tx.onerror = () => reject(tx.error);
     };
@@ -50,36 +54,32 @@ function loadBackground(): Promise<string | null> {
 
 export default function Home() {
   const [words, setWords] = useState<Word[]>([]);
-  const [progress, setProgress] = useState<Progress>({});
+  const [quiz, setQuiz] = useState<QuizStore>(() => emptyQuizStore());
   const [view, setView] = useState<View>("home");
-  const [mode, setMode] = useState<Mode>("choice");
+  const [mode, setMode] = useState<QuizMode>("choice");
+  const [scope, setScope] = useState<QuizScope>("standard");
+  const [currentId, setCurrentId] = useState(1);
+  const [spellingInput, setSpellingInput] = useState("");
+  const [showNumbers, setShowNumbers] = useState(false);
+  const [numberPage, setNumberPage] = useState(0);
   const [theme, setTheme] = useState<Theme>("system");
-  const [sessionSize, setSessionSize] = useState(50);
-  const [dailyCount, setDailyCount] = useState(0);
-  const [session, setSession] = useState<Word[]>([]);
-  const [index, setIndex] = useState(0);
-  const [selectedAnswer, setSelectedAnswer] = useState("");
-  const [spellingAnswer, setSpellingAnswer] = useState("");
-  const [answered, setAnswered] = useState(false);
+  const [dailyGoal, setDailyGoal] = useState(50);
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"all" | Mark>("all");
   const [background, setBackground] = useState<string | null>(null);
   const [overlay, setOverlay] = useState(38);
   const [blur, setBlur] = useState(0);
   const uploadRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    fetch("./words.json").then((r) => r.json()).then(setWords);
+    fetch("./words.json").then((response) => response.json()).then(setWords);
     Promise.resolve().then(() => {
+      setQuiz(loadQuizStore());
       try {
-        setProgress(JSON.parse(localStorage.getItem(PROGRESS_KEY) || "{}"));
         const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
         if (saved.theme) setTheme(saved.theme);
-        if (saved.sessionSize) setSessionSize(saved.sessionSize);
+        if (saved.sessionSize) setDailyGoal(saved.sessionSize);
         if (typeof saved.overlay === "number") setOverlay(saved.overlay);
         if (typeof saved.blur === "number") setBlur(saved.blur);
-        const daily = JSON.parse(localStorage.getItem(DAILY_KEY) || "{}");
-        if (daily.date === todayKey() && typeof daily.count === "number") setDailyCount(daily.count);
       } catch { /* keep defaults */ }
     });
     loadBackground().then(setBackground);
@@ -91,197 +91,232 @@ export default function Home() {
       ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
       : theme;
     apply();
-    const mq = matchMedia("(prefers-color-scheme: dark)");
-    mq.addEventListener("change", apply);
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ theme, sessionSize, overlay, blur }));
-    return () => mq.removeEventListener("change", apply);
-  }, [theme, sessionSize, overlay, blur]);
+    const media = matchMedia("(prefers-color-scheme: dark)");
+    media.addEventListener("change", apply);
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ theme, sessionSize: dailyGoal, overlay, blur }));
+    return () => media.removeEventListener("change", apply);
+  }, [theme, dailyGoal, overlay, blur]);
 
-  const stats = useMemo(() => {
-    const values = Object.values(progress);
-    return {
-      learned: values.length,
-      known: values.filter((x) => x.mark === "known").length,
-      fuzzy: values.filter((x) => x.mark === "fuzzy").length,
-      unknown: values.filter((x) => x.mark === "unknown").length,
-    };
-  }, [progress]);
+  const source = useMemo(() => {
+    if (scope === "standard") return words;
+    const wrong = new Set(quiz.wrong[mode]);
+    return words.filter((item) => wrong.has(item.word));
+  }, [words, quiz.wrong, mode, scope]);
+  const currentIndex = Math.max(0, source.findIndex((item) => item.id === currentId));
+  const current = source[currentIndex];
+  const record = current ? quiz.answers[scope][mode][current.word] : undefined;
 
-  const startStudy = (nextMode: Mode, wrongOnly = false) => {
-    if (!wrongOnly && session.length && mode === nextMode) {
-      setView("study");
-      return;
-    }
-    const source = wrongOnly
-      ? words.filter((w) => progress[w.word]?.mark !== "known" && progress[w.word])
-      : words;
-    if (!source.length) return;
+  useEffect(() => {
+    if (mode === "spelling") Promise.resolve().then(() => setSpellingInput(record?.userAnswer || ""));
+  }, [currentId, mode, scope, record?.userAnswer]);
+
+  const updateQuiz = (change: (next: QuizStore) => void) => {
+    const next = structuredClone(quiz);
+    if (next.daily.date !== todayKey()) next.daily = { date: todayKey(), choiceCorrect: [], spellingCorrect: [] };
+    change(next);
+    setQuiz(next);
+    saveQuizStore(next);
+  };
+
+  const savePosition = (id: number) => {
+    setCurrentId(id);
+    updateQuiz((next) => { next.positions[scope][mode] = id; });
+  };
+
+  const startPractice = (nextMode: QuizMode, nextScope: QuizScope) => {
+    const available = nextScope === "standard"
+      ? words
+      : words.filter((item) => new Set(quiz.wrong[nextMode]).has(item.word));
+    if (!available.length) return;
+    const savedId = quiz.positions[nextScope][nextMode];
+    const id = available.some((item) => item.id === savedId) ? savedId : available[0].id;
     setMode(nextMode);
-    setSession(source);
-    setIndex(0);
-    setSelectedAnswer("");
-    setSpellingAnswer("");
-    setAnswered(false);
-    setView("study");
+    setScope(nextScope);
+    setCurrentId(id);
+    setNumberPage(Math.floor(Math.max(0, available.findIndex((item) => item.id === id)) / NUMBER_PAGE_SIZE));
+    setShowNumbers(false);
+    setView("practice");
   };
 
-  const markWord = (mark: Mark) => {
-    const current = session[index];
-    if (!current) return;
-    const next = {
-      ...progress,
-      [current.word]: { mark, seen: (progress[current.word]?.seen || 0) + 1, updated: (progress[current.word]?.updated || 0) + 1 },
-    };
-    setProgress(next);
-    localStorage.setItem(PROGRESS_KEY, JSON.stringify(next));
-    if (index < session.length - 1) {
-      setIndex(index + 1);
-      setSelectedAnswer("");
-      setSpellingAnswer("");
-      setAnswered(false);
-    } else {
-      setSession([]);
-      setIndex(0);
-      setSelectedAnswer("");
-      setSpellingAnswer("");
-      setAnswered(false);
-      setView("home");
-    }
+  const moveTo = (item?: Word) => {
+    if (!item) return;
+    savePosition(item.id);
+    setShowNumbers(false);
   };
 
-  const recordDailyAnswer = () => {
-    const next = dailyCount + 1;
-    setDailyCount(next);
-    localStorage.setItem(DAILY_KEY, JSON.stringify({ date: todayKey(), count: next }));
-  };
-
-  const changeBackground = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/")) return alert("请选择图片文件");
-    if (file.size > 12 * 1024 * 1024) return alert("图片请不要超过 12MB");
-    if (background) URL.revokeObjectURL(background);
-    setBackground(await saveBackground(file));
-    event.target.value = "";
-  };
-
-  const removeBackground = async () => {
-    if (background) URL.revokeObjectURL(background);
-    setBackground(await saveBackground());
-  };
-
-  const filteredWords = useMemo(() => words.filter((item) => {
-    const matches = `${item.word} ${item.meaning}`.toLowerCase().includes(query.toLowerCase());
-    return matches && (filter === "all" || progress[item.word]?.mark === filter);
-  }), [words, progress, query, filter]);
-
-  const wrongWords = words.filter((w) => progress[w.word]?.mark === "fuzzy" || progress[w.word]?.mark === "unknown");
-  const current = session[index];
-  const choices = useMemo(() => {
-    if (!current || mode !== "choice") return [];
-    const currentPosition = words.findIndex((item) => item.id === current.id);
+  const choiceOptions = useMemo(() => {
+    if (!current || mode !== "choice" || !words.length) return [];
+    const position = words.findIndex((item) => item.id === current.id);
     const options = [current];
     for (let offset = 1; options.length < 4 && offset < words.length; offset++) {
-      const candidate = words[(currentPosition + offset) % words.length];
+      const candidate = words[(position + offset) % words.length];
       if (candidate.word !== current.word) options.push(candidate);
     }
     const rotation = current.id % options.length;
     return [...options.slice(rotation), ...options.slice(0, rotation)];
   }, [current, mode, words]);
-  const answerCorrect = mode === "choice"
-    ? selectedAnswer === current?.word
-    : spellingAnswer.trim().toLowerCase() === current?.word.toLowerCase();
-  const submitAnswer = () => {
-    if (!current || answered || !spellingAnswer.trim()) return;
-    recordDailyAnswer();
-    if (answerCorrect) markWord("known");
-    else setAnswered(true);
+
+  const nextAfterCorrect = (nextWord?: Word) => {
+    if (nextWord) setCurrentId(nextWord.id);
+    else setView(scope === "review" ? "wrong" : "home");
   };
-  const chooseAnswer = (word: string) => {
-    if (!current || answered) return;
-    setSelectedAnswer(word);
-    recordDailyAnswer();
-    if (word === current.word) markWord("known");
-    else setAnswered(true);
-  };
-  const nextQuestion = () => markWord("unknown");
-  const moveQuestion = (direction: -1 | 1) => {
-    const nextIndex = index + direction;
-    if (nextIndex < 0 || nextIndex >= session.length) return;
-    if (answered) {
-      const nextProgress = {
-        ...progress,
-        [current.word]: { mark: "unknown" as Mark, seen: (progress[current.word]?.seen || 0) + 1, updated: (progress[current.word]?.updated || 0) + 1 },
+
+  const chooseAnswer = (answer: Word) => {
+    if (!current || record?.showAnswer || record?.correct) return;
+    const correct = answer.word === current.word;
+    const nextWord = source[currentIndex + 1];
+    updateQuiz((next) => {
+      const previous = next.answers[scope].choice[current.word];
+      next.answers[scope].choice[current.word] = {
+        userAnswer: answer.word,
+        correct,
+        everWrong: previous?.everWrong || !correct,
+        attempts: (previous?.attempts || 0) + 1,
+        showAnswer: !correct,
       };
-      setProgress(nextProgress);
-      localStorage.setItem(PROGRESS_KEY, JSON.stringify(nextProgress));
-    }
-    setIndex(nextIndex);
-    setSelectedAnswer("");
-    setSpellingAnswer("");
-    setAnswered(false);
+      if (!correct) addWrong(next, "choice", current.word);
+      if (correct && scope === "standard") markDailyCorrect(next, "choice", current.word);
+      if (correct && scope === "review") removeWrong(next, "choice", current.word);
+      if (correct) next.positions[scope].choice = nextWord?.id || 1;
+    });
+    if (correct) nextAfterCorrect(nextWord);
   };
-  const nav = (next: View) => { setView(next); setQuery(""); };
 
-  return (
-    <main className="app-shell">
-      {background && <div className="custom-background" style={{ backgroundImage: `url(${background})`, filter: `blur(${blur}px) scale(1.03)` }} />}
-      {background && <div className="background-overlay" style={{ opacity: overlay / 100 }} />}
-      <aside className="sidebar">
-        <button className="brand" onClick={() => nav("home")}><span>六</span><b>六级单词</b></button>
-        <nav>
-          <button className={view === "home" ? "active" : ""} onClick={() => nav("home")}><i>⌂</i>首页</button>
-          <button className={view === "study" ? "active" : ""} onClick={() => startStudy("choice")}><i>▣</i>答题</button>
-          <button className={view === "wrong" ? "active" : ""} onClick={() => nav("wrong")}><i>◇</i>错词本</button>
-          <button className={view === "words" ? "active" : ""} onClick={() => nav("words")}><i>☷</i>单词列表</button>
-          <button className={view === "settings" ? "active" : ""} onClick={() => nav("settings")}><i>⚙</i>设置</button>
-        </nav>
-        <div className="theme-switch" aria-label="切换主题">
-          <button className={theme === "light" ? "selected" : ""} onClick={() => setTheme("light")}>☀</button>
-          <button className={theme === "system" ? "selected" : ""} onClick={() => setTheme("system")}>自动</button>
-          <button className={theme === "dark" ? "selected" : ""} onClick={() => setTheme("dark")}>☾</button>
-        </div>
-      </aside>
+  const retryChoice = () => {
+    if (!current) return;
+    updateQuiz((next) => {
+      const previous = next.answers.review.choice[current.word];
+      next.answers.review.choice[current.word] = { ...previous, userAnswer: "", correct: false, showAnswer: false };
+    });
+  };
 
-      <section className="content">
-        {view === "home" && <>
-          <header className="topbar"><div><p className="eyebrow">CET-6 VOCABULARY</p><h1>六级单词 <em>{words.length || "…"}词</em></h1></div><p>每天一点，慢慢把陌生变熟悉。</p></header>
-          <section className="dashboard-grid">
-            <article className="welcome-card"><span className="leaf">❧</span><p>今日学习</p><h2>{stats.learned ? "继续保持，你已经在进步了" : "从今天的第一个单词开始"}</h2><div className="stat-row"><b>{stats.learned}</b><span>已学习</span><b>{stats.known}</b><span>已掌握</span><b>{wrongWords.length}</b><span>待复习</span></div></article>
-            <article className="progress-card"><div className="ring" style={{ "--percent": `${Math.min(100, Math.round(dailyCount / Math.max(sessionSize, 1) * 100)) * 3.6}deg` } as React.CSSProperties}><span>{Math.min(100, Math.round(dailyCount / Math.max(sessionSize, 1) * 100))}%</span></div><div className="progress-details"><p>今日进度</p><h3>{dailyCount} <small>/ {sessionSize} 题</small></h3><div className="daily-bar"><i style={{ width: `${Math.min(100, dailyCount / Math.max(sessionSize, 1) * 100)}%` }} /></div><div className="legend"><span>● 词库已练 {stats.learned}</span><span>● 已掌握 {stats.known}</span><span>● 待复习 {wrongWords.length}</span></div></div></article>
-            <button className="study-card en" onClick={() => startStudy("choice")}><span className="language-icon">A<small>?</small></span><div><h2>选择题</h2><p>根据英文选择正确的中文释义</p><b>开始答题 →</b></div></button>
-            <button className="study-card zh" onClick={() => startStudy("spelling")}><span className="language-icon">中<small>✎</small></span><div><h2>拼写题</h2><p>根据中文释义拼写英文单词</p><b>开始答题 →</b></div></button>
-            <button className="mini-card" onClick={() => nav("wrong")}><span>▱</span><div><h3>错词本</h3><p>{wrongWords.length} 个单词等待复习</p></div><b>›</b></button>
-            <button className="mini-card" onClick={() => nav("words")}><span>☷</span><div><h3>单词列表</h3><p>搜索并浏览全部词汇</p></div><b>›</b></button>
-          </section>
-        </>}
+  const submitSpelling = () => {
+    if (!current) return;
+    const previous = quiz.answers[scope].spelling[current.word];
+    if (previous?.showAnswer) {
+      setSpellingInput("");
+      updateQuiz((next) => {
+        next.answers[scope].spelling[current.word] = { ...previous, userAnswer: "", showAnswer: false };
+      });
+      return;
+    }
+    const answer = spellingInput.trim();
+    if (!answer) return;
+    const correct = answer.toLowerCase() === current.word.toLowerCase();
+    const nextWord = source[currentIndex + 1];
+    updateQuiz((next) => {
+      const old = next.answers[scope].spelling[current.word];
+      next.answers[scope].spelling[current.word] = {
+        userAnswer: answer,
+        correct,
+        everWrong: old?.everWrong || !correct,
+        attempts: (old?.attempts || 0) + 1,
+        showAnswer: !correct,
+      };
+      if (!correct) addWrong(next, "spelling", current.word);
+      if (correct && scope === "standard") markDailyCorrect(next, "spelling", current.word);
+      if (correct && scope === "review") removeWrong(next, "spelling", current.word);
+      if (correct) next.positions[scope].spelling = nextWord?.id || 1;
+    });
+    if (correct) nextAfterCorrect(nextWord);
+  };
 
-        {view === "study" && current && <section className="study-view">
-          <header className="page-head"><button onClick={() => nav("home")}>← 返回首页</button><span>{mode === "choice" ? "选择题" : "拼写题"}</span></header>
-          <div className="study-progress"><i style={{ width: `${(index + 1) / session.length * 100}%` }} /></div>
-          <div className="question-toolbar"><button disabled={index === 0} onClick={() => moveQuestion(-1)}>← 上一题</button><strong>题号 {current.id} <small>/ {words.length}</small></strong><button disabled={index === session.length - 1} onClick={() => moveQuestion(1)}>下一题 →</button></div>
-          <article className="flashcard">
-            <p className="prompt-label">{mode === "choice" ? "请选择正确的中文释义" : "请根据中文释义拼写英文单词"}</p>
-            <h2>{mode === "choice" ? current.word : current.meaning}</h2>
-            {mode === "choice" ? <div className="choice-grid">{choices.map((item) => <button key={item.word} disabled={answered} className={`${selectedAnswer === item.word ? "selected" : ""} ${answered && item.word === current.word ? "correct" : ""} ${answered && selectedAnswer === item.word && item.word !== current.word ? "incorrect" : ""}`} onClick={() => chooseAnswer(item.word)}>{item.meaning}</button>)}</div> : <><input className="spelling-input" disabled={answered} value={spellingAnswer} onChange={(event) => setSpellingAnswer(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitAnswer()} placeholder="输入英文单词，按 Enter 判断" autoComplete="off" autoCapitalize="none" spellCheck={false} />{!answered && <p className="enter-tip">按 Enter 键判断正误</p>}</>}
-            {answered && <div className="answer-result incorrect"><strong>回答错误</strong><span>正确答案：{mode === "choice" ? current.meaning : current.word}</span><button onClick={nextQuestion}>{index < session.length - 1 ? "下一题 →" : "完成本轮"}</button></div>}
-          </article>
-        </section>}
+  const answerClass = (item: Word) => {
+    if (!record) return "";
+    if (record.correct && record.userAnswer === item.word) return "correct";
+    if (record.showAnswer && item.word === current?.word) return "correct";
+    if (record.showAnswer && record.userAnswer === item.word) return "incorrect selected";
+    return record.userAnswer === item.word ? "selected" : "";
+  };
 
-        {view === "wrong" && <section className="list-view"><header className="section-title"><div><p className="eyebrow">REVIEW</p><h2>错词本</h2><p>答错的单词都会自动加入这里。</p></div><button disabled={!wrongWords.length} onClick={() => startStudy("choice", true)}>选择题复习</button></header><WordTable items={wrongWords} progress={progress} /></section>}
+  const numberStatus = (item: Word) => {
+    const answer = quiz.answers[scope][mode][item.word];
+    if (!answer) return "unanswered";
+    if (answer.correct && answer.everWrong) return "corrected";
+    if (answer.correct) return "correct";
+    if (answer.everWrong) return "wrong";
+    return "unanswered";
+  };
 
-        {view === "words" && <section className="list-view"><header className="section-title"><div><p className="eyebrow">ALL WORDS</p><h2>单词列表</h2><p>共 {words.length} 个单词，支持中英文搜索。</p></div></header><div className="filters"><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索英文或中文释义…"/><select value={filter} onChange={(e) => setFilter(e.target.value as typeof filter)}><option value="all">全部状态</option><option value="known">已掌握</option><option value="fuzzy">模糊</option><option value="unknown">不认识</option></select></div><WordTable items={filteredWords.slice(0, 300)} progress={progress} /><p className="table-tip">{filteredWords.length > 300 ? `结果较多，当前显示前 300 条（共 ${filteredWords.length} 条）` : `共 ${filteredWords.length} 条`}</p></section>}
+  const completedToday = dailyCompletedCount(quiz);
+  const learnedWords = useMemo(() => {
+    const choice = quiz.answers.standard.choice;
+    const spelling = quiz.answers.standard.spelling;
+    return words.filter((item) => choice[item.word]?.correct || spelling[item.word]?.correct).length;
+  }, [quiz.answers.standard, words]);
+  const filteredWords = useMemo(() => words.filter((item) => `${item.word} ${item.meaning}`.toLowerCase().includes(query.toLowerCase())), [words, query]);
+  const numberPages = Math.max(1, Math.ceil(source.length / NUMBER_PAGE_SIZE));
+  const visibleNumbers = source.slice(numberPage * NUMBER_PAGE_SIZE, (numberPage + 1) * NUMBER_PAGE_SIZE);
 
-        {view === "settings" && <section className="settings-view"><header className="section-title"><div><p className="eyebrow">PREFERENCES</p><h2>设置</h2><p>把学习页面调整成你喜欢的样子。</p></div></header>
-          <article className="setting-card"><div><h3>白天与黑夜模式</h3><p>可以手动切换，也可以跟随电脑系统。</p></div><div className="segmented"><button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")}>☀ 白天</button><button className={theme === "system" ? "active" : ""} onClick={() => setTheme("system")}>跟随系统</button><button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")}>☾ 黑夜</button></div></article>
-          <article className="setting-card"><div><h3>每日答题目标</h3><p>设置首页每日进度的目标题数。</p></div><div className="segmented">{[10,20,50,100].map((n) => <button key={n} className={sessionSize === n ? "active" : ""} onClick={() => setSessionSize(n)}>{n}</button>)}</div></article>
-          <article className="setting-card background-setting"><div><h3>自定义背景图片</h3><p>图片只保存在你的浏览器中，不会上传到服务器。最大 12MB。</p></div><div className="background-actions"><input ref={uploadRef} hidden type="file" accept="image/*" onChange={changeBackground}/><button className="upload" onClick={() => uploadRef.current?.click()}>选择本地图片</button>{background && <button onClick={removeBackground}>恢复默认</button>}</div>{background && <div className="sliders"><label>遮罩强度 <input type="range" min="0" max="85" value={overlay} onChange={(e) => setOverlay(+e.target.value)}/><b>{overlay}%</b></label><label>背景模糊 <input type="range" min="0" max="16" value={blur} onChange={(e) => setBlur(+e.target.value)}/><b>{blur}px</b></label></div>}</article>
-        </section>}
-      </section>
-    </main>
-  );
+  const changeBackground = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !file.type.startsWith("image/") || file.size > 12 * 1024 * 1024) return;
+    if (background) URL.revokeObjectURL(background);
+    setBackground(await saveBackground(file));
+    event.target.value = "";
+  };
+  const removeBackground = async () => {
+    if (background) URL.revokeObjectURL(background);
+    setBackground(await saveBackground());
+  };
+
+  return <main className="app-shell">
+    {background && <div className="custom-background" style={{ backgroundImage: `url(${background})`, filter: `blur(${blur}px) scale(1.03)` }} />}
+    {background && <div className="background-overlay" style={{ opacity: overlay / 100 }} />}
+    <aside className="sidebar">
+      <button className="brand" onClick={() => setView("home")}><span>六</span><b>六级单词</b></button>
+      <nav>
+        <button className={view === "home" ? "active" : ""} onClick={() => setView("home")}><i>⌂</i>首页</button>
+        <button className={view === "practice" && scope === "standard" ? "active" : ""} onClick={() => startPractice("choice", "standard")}><i>▣</i>学习</button>
+        <button className={view === "wrong" || scope === "review" ? "active" : ""} onClick={() => setView("wrong")}><i>◇</i>错题本</button>
+        <button className={view === "words" ? "active" : ""} onClick={() => setView("words")}><i>☷</i>单词列表</button>
+        <button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}><i>⚙</i>设置</button>
+      </nav>
+      <div className="theme-switch" aria-label="切换主题"><button className={theme === "light" ? "selected" : ""} onClick={() => setTheme("light")}>☀</button><button className={theme === "system" ? "selected" : ""} onClick={() => setTheme("system")}>自动</button><button className={theme === "dark" ? "selected" : ""} onClick={() => setTheme("dark")}>☾</button></div>
+    </aside>
+
+    <section className="content">
+      {view === "home" && <>
+        <header className="topbar"><div><p className="eyebrow">CET-6 VOCABULARY</p><h1>六级单词 <em>{words.length || "…"}词</em></h1></div><p>选择与拼写都正确，才算真正完成。</p></header>
+        <section className="dashboard-grid">
+          <article className="welcome-card"><span className="leaf">❧</span><p>学习概况</p><h2>{completedToday ? "今天的双项练习正在稳步推进" : "从选择与拼写的第一题开始"}</h2><div className="stat-row"><b>{learnedWords}</b><span>已练习</span><b>{quiz.wrong.choice.length}</b><span>选择错题</span><b>{quiz.wrong.spelling.length}</b><span>拼写错题</span></div></article>
+          <article className="progress-card"><div className="ring" style={{ "--percent": `${Math.min(100, completedToday / Math.max(dailyGoal, 1) * 100) * 3.6}deg` } as React.CSSProperties}><span>{Math.min(100, Math.round(completedToday / Math.max(dailyGoal, 1) * 100))}%</span></div><div className="progress-details"><p>今日双项完成</p><h3>{completedToday} <small>/ {dailyGoal} 词</small></h3><div className="daily-bar"><i style={{ width: `${Math.min(100, completedToday / Math.max(dailyGoal, 1) * 100)}%` }} /></div><div className="legend"><span>● 选择与拼写均正确才计数</span></div></div></article>
+          <button className="study-card en" onClick={() => startPractice("choice", "standard")}><span className="language-icon">A<small>?</small></span><div><h2>选择题</h2><p>按词表顺序练习，保存每题答案</p><b>继续答题 →</b></div></button>
+          <button className="study-card zh" onClick={() => startPractice("spelling", "standard")}><span className="language-icon">中<small>✎</small></span><div><h2>拼写题</h2><p>反复拼写，直到正确</p><b>继续答题 →</b></div></button>
+          <button className="mini-card" onClick={() => setView("wrong")}><span>▱</span><div><h3>错题本</h3><p>选择 {quiz.wrong.choice.length} 题 · 拼写 {quiz.wrong.spelling.length} 题</p></div><b>›</b></button>
+          <button className="mini-card" onClick={() => setView("words")}><span>☷</span><div><h3>单词列表</h3><p>搜索并浏览全部词汇</p></div><b>›</b></button>
+        </section>
+      </>}
+
+      {view === "practice" && current && <section className="study-view">
+        <header className="page-head"><button onClick={() => setView(scope === "review" ? "wrong" : "home")}>← {scope === "review" ? "返回错题本" : "返回首页"}</button><span>{scope === "review" ? "错题复习" : "普通学习"} · {mode === "choice" ? "选择题" : "拼写题"}</span></header>
+        <div className="study-progress"><i style={{ width: `${(currentIndex + 1) / Math.max(source.length, 1) * 100}%` }} /></div>
+        <div className="question-toolbar"><button disabled={currentIndex === 0} onClick={() => moveTo(source[currentIndex - 1])}>← 上一题</button><button className="number-trigger" onClick={() => { setNumberPage(Math.floor(currentIndex / NUMBER_PAGE_SIZE)); setShowNumbers(true); }}>题号 {current.id} <small>/ {words.length}</small>⌄</button><button disabled={currentIndex === source.length - 1} onClick={() => moveTo(source[currentIndex + 1])}>下一题 →</button></div>
+        <article className="flashcard">
+          <p className="prompt-label">{mode === "choice" ? "点击选项立即判断" : "输入英文后按 Enter 判断"}</p>
+          <h2>{mode === "choice" ? current.word : current.meaning}</h2>
+          {mode === "choice" ? <div className="choice-grid">{choiceOptions.map((item) => <button key={item.word} disabled={Boolean(record?.showAnswer || record?.correct)} className={answerClass(item)} onClick={() => chooseAnswer(item)}>{item.meaning}</button>)}</div> : <><input className="spelling-input" disabled={Boolean(record?.correct)} value={spellingInput} onChange={(event) => setSpellingInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitSpelling()} placeholder={record?.showAnswer ? "再次按 Enter 重新拼写" : "输入英文单词"} autoComplete="off" autoCapitalize="none" spellCheck={false} /><p className="enter-tip">{record?.showAnswer ? "再次按 Enter 隐藏答案并重新作答" : "按 Enter 键判断正误"}</p></>}
+          {record?.showAnswer && <div className="answer-result incorrect"><strong>回答错误</strong><span>正确答案：{mode === "choice" ? current.meaning : current.word}</span>{mode === "choice" && scope === "review" && <button onClick={retryChoice}>重新作答</button>}</div>}
+          {record?.correct && <div className={`saved-result ${record.everWrong ? "corrected" : "correct"}`}>{record.everWrong ? "曾答错，现已答对" : "回答正确"}</div>}
+        </article>
+      </section>}
+
+      {view === "wrong" && <section className="wrong-home"><header className="section-title"><div><p className="eyebrow">WRONG BOOK</p><h2>错题本</h2><p>选择题与拼写题分开复习；在复习中答对后移出对应错题本。</p></div></header><div className="wrong-mode-grid"><button disabled={!quiz.wrong.choice.length} onClick={() => startPractice("choice", "review")}><span>A?</span><div><h3>选择题复习</h3><p>{quiz.wrong.choice.length} 道错题</p></div><b>进入 →</b></button><button disabled={!quiz.wrong.spelling.length} onClick={() => startPractice("spelling", "review")}><span>中✎</span><div><h3>拼写题复习</h3><p>{quiz.wrong.spelling.length} 道错题</p></div><b>进入 →</b></button></div></section>}
+
+      {view === "words" && <section className="list-view"><header className="section-title"><div><p className="eyebrow">ALL WORDS</p><h2>单词列表</h2><p>共 {words.length} 个单词，支持中英文搜索。</p></div></header><div className="filters"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索英文或中文释义…" /></div><WordTable items={filteredWords.slice(0, 300)} quiz={quiz} /><p className="table-tip">{filteredWords.length > 300 ? `当前显示前 300 条（共 ${filteredWords.length} 条）` : `共 ${filteredWords.length} 条`}</p></section>}
+
+      {view === "settings" && <section className="settings-view"><header className="section-title"><div><p className="eyebrow">PREFERENCES</p><h2>设置</h2><p>调整每日目标和显示方式。</p></div></header><article className="setting-card"><div><h3>白天与黑夜模式</h3><p>手动切换或跟随系统。</p></div><div className="segmented"><button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")}>☀ 白天</button><button className={theme === "system" ? "active" : ""} onClick={() => setTheme("system")}>跟随系统</button><button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")}>☾ 黑夜</button></div></article><article className="setting-card"><div><h3>每日完成目标</h3><p>一个单词的选择题与拼写题均正确后计为一个。</p></div><div className="segmented">{[10, 20, 50, 100].map((number) => <button key={number} className={dailyGoal === number ? "active" : ""} onClick={() => setDailyGoal(number)}>{number}</button>)}</div></article><article className="setting-card background-setting"><div><h3>自定义背景图片</h3><p>图片仅保存在当前浏览器，最大 12MB。</p></div><div className="background-actions"><input ref={uploadRef} hidden type="file" accept="image/*" onChange={changeBackground} /><button className="upload" onClick={() => uploadRef.current?.click()}>选择本地图片</button>{background && <button onClick={removeBackground}>恢复默认</button>}</div>{background && <div className="sliders"><label>遮罩强度 <input type="range" min="0" max="85" value={overlay} onChange={(event) => setOverlay(+event.target.value)} /><b>{overlay}%</b></label><label>背景模糊 <input type="range" min="0" max="16" value={blur} onChange={(event) => setBlur(+event.target.value)} /><b>{blur}px</b></label></div>}</article></section>}
+    </section>
+
+    {showNumbers && <div className="number-modal" role="dialog" aria-modal="true" aria-label="选择题号"><button className="modal-backdrop" onClick={() => setShowNumbers(false)} aria-label="关闭题号面板" /><section className="number-panel"><header><div><h3>选择题号</h3><p><span className="dot correct" />正确 <span className="dot wrong" />错误 <span className="dot corrected" />先错后对</p></div><button onClick={() => setShowNumbers(false)}>×</button></header><div className="number-grid">{visibleNumbers.map((item) => <button key={item.id} className={`${numberStatus(item)} ${item.id === current.id ? "current" : ""}`} onClick={() => moveTo(item)}>{item.id}</button>)}</div><footer><button disabled={numberPage === 0} onClick={() => setNumberPage(numberPage - 1)}>← 上100题</button><span>{numberPage + 1} / {numberPages}</span><button disabled={numberPage >= numberPages - 1} onClick={() => setNumberPage(numberPage + 1)}>下100题 →</button></footer></section></div>}
+  </main>;
 }
 
-function WordTable({ items, progress }: { items: Word[]; progress: Progress }) {
-  return <div className="word-table">{items.length ? items.map((item) => <div className="word-row" key={item.id}><strong>{item.word}</strong><span>{item.meaning}</span><em className={progress[item.word]?.mark || "new"}>{progress[item.word]?.mark === "known" ? "已掌握" : progress[item.word]?.mark === "fuzzy" ? "模糊" : progress[item.word]?.mark === "unknown" ? "不认识" : "未学习"}</em></div>) : <div className="empty">这里暂时没有单词。</div>}</div>;
+function WordTable({ items, quiz }: { items: Word[]; quiz: QuizStore }) {
+  return <div className="word-table">{items.length ? items.map((item) => {
+    const choice = quiz.answers.standard.choice[item.word]?.correct;
+    const spelling = quiz.answers.standard.spelling[item.word]?.correct;
+    const status = choice && spelling ? "双项完成" : choice ? "选择已完成" : spelling ? "拼写已完成" : "未完成";
+    return <div className="word-row" key={item.id}><strong>{item.id}. {item.word}</strong><span>{item.meaning}</span><em className={choice && spelling ? "known" : "new"}>{status}</em></div>;
+  }) : <div className="empty">这里暂时没有单词。</div>}</div>;
 }
