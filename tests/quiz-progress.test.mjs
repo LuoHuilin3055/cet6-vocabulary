@@ -7,6 +7,7 @@ import {
   markDailyCorrect,
   nextReviewItem,
   removeWrong,
+  recordAttempt,
   shouldRemoveSpellingWrong,
 } from "../app/quiz-storage.ts";
 
@@ -18,6 +19,14 @@ test("daily progress counts a word only after both modes are correct", () => {
   assert.equal(dailyCompletedCount(store), 1);
   markDailyCorrect(store, "choice", "consistent");
   assert.equal(dailyCompletedCount(store), 1);
+});
+
+test("answer attempts accumulate daily and per-word statistics", () => {
+  const store = emptyQuizStore();
+  recordAttempt(store, "battery", false);
+  recordAttempt(store, "battery", true);
+  assert.deepEqual(store.statistics.words.battery, { answered: 2, correct: 1, wrong: 1 });
+  assert.deepEqual(store.statistics.daily[store.daily.date], { answered: 2, correct: 1, wrong: 1 });
 });
 
 test("review navigation wraps remaining wrong items until the queue is empty", () => {

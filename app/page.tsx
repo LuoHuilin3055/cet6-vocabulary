@@ -11,6 +11,7 @@ import {
   QuizMode,
   QuizScope,
   QuizStore,
+  recordAttempt,
   removeWrong,
   saveQuizStore,
   shouldRemoveSpellingWrong,
@@ -19,7 +20,7 @@ import {
 
 type Word = { id: number; word: string; meaning: string };
 type Theme = "light" | "dark" | "system";
-type View = "home" | "practice" | "wrong" | "review-complete" | "words" | "settings";
+type View = "home" | "practice" | "wrong" | "review-complete" | "words" | "stats" | "settings";
 
 const SETTINGS_KEY = "cet6-settings-v1";
 const BG_DB = "cet6-background";
@@ -218,6 +219,7 @@ export default function Home() {
         showAnswer: !correct,
       };
       if (!correct) addWrong(next, "choice", current.word);
+      recordAttempt(next, current.word, correct);
       if (correct && scope === "standard") markDailyCorrect(next, "choice", current.word);
       if (correct && scope === "review") removeWrong(next, "choice", current.word);
       if (correct) next.positions[scope].choice = nextWord?.id || 1;
@@ -267,6 +269,7 @@ export default function Home() {
         roundWrong: scope === "review" ? (old?.roundWrong || !correct) : old?.roundWrong,
       };
       if (!correct) addWrong(next, "spelling", current.word);
+      recordAttempt(next, current.word, correct);
       if (correct && scope === "standard") markDailyCorrect(next, "spelling", current.word);
       if (correct && scope === "review") {
         if (removeOnCorrect) {
@@ -328,6 +331,16 @@ export default function Home() {
     setBackground(await saveBackground());
   };
 
+  const resetQuizRecords = () => {
+    if (!confirm("确定要重置全部刷题记录吗？答题进度、错题本和统计数据都会被清空，此操作无法撤销。")) return;
+    const next = emptyQuizStore();
+    setQuiz(next);
+    saveQuizStore(next);
+    localStorage.removeItem("cet6-progress-v1");
+    setCurrentId(1);
+    setView("home");
+  };
+
   const handleKeyboard = (event: React.KeyboardEvent<HTMLElement>) => {
     if (event.ctrlKey || event.metaKey) return;
     const key = event.key.toLowerCase();
@@ -383,6 +396,7 @@ export default function Home() {
         <button className={view === "practice" && scope === "standard" ? "active" : ""} onClick={() => startPractice("choice", "standard")}><i>▣</i>学习</button>
         <button className={view === "wrong" || scope === "review" ? "active" : ""} onClick={() => setView("wrong")}><i>◇</i>错题本</button>
         <button className={view === "words" ? "active" : ""} onClick={() => setView("words")}><i>☷</i>单词列表</button>
+        <button className={view === "stats" ? "active" : ""} onClick={() => setView("stats")}><i>▥</i>统计</button>
         <button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}><i>⚙</i>设置</button>
       </nav>
       <div className="theme-switch" aria-label="切换主题"><button className={theme === "light" ? "selected" : ""} onClick={() => setTheme("light")}>☀</button><button className={theme === "system" ? "selected" : ""} onClick={() => setTheme("system")}>自动</button><button className={theme === "dark" ? "selected" : ""} onClick={() => setTheme("dark")}>☾</button></div>
@@ -420,11 +434,38 @@ export default function Home() {
 
       {view === "words" && <section className="list-view"><header className="section-title"><div><p className="eyebrow">ALL WORDS</p><h2>单词列表</h2><p>共 {words.length} 个单词，支持中英文搜索。</p></div></header><div className="filters"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索英文或中文释义…" /></div><WordTable items={filteredWords.slice(0, 300)} quiz={quiz} /><p className="table-tip">{filteredWords.length > 300 ? `当前显示前 300 条（共 ${filteredWords.length} 条）` : `共 ${filteredWords.length} 条`}</p></section>}
 
+      {view === "stats" && <StatisticsPage quiz={quiz} words={words} onReset={resetQuizRecords} />}
+
       {view === "settings" && <section className="settings-view"><header className="section-title"><div><p className="eyebrow">PREFERENCES</p><h2>设置</h2><p>调整每日目标和显示方式。</p></div></header><article className="setting-card"><div><h3>白天与黑夜模式</h3><p>手动切换或跟随系统。</p></div><div className="segmented"><button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")}>☀ 白天</button><button className={theme === "system" ? "active" : ""} onClick={() => setTheme("system")}>跟随系统</button><button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")}>☾ 黑夜</button></div></article><article className="setting-card"><div><h3>每日完成目标</h3><p>一个单词的选择题与拼写题均正确后计为一个。</p></div><div className="segmented">{[10, 20, 50, 100].map((number) => <button key={number} className={dailyGoal === number ? "active" : ""} onClick={() => setDailyGoal(number)}>{number}</button>)}</div></article><article className="setting-card background-setting"><div><h3>自定义背景图片</h3><p>图片仅保存在当前浏览器，最大 12MB。</p></div><div className="background-actions"><input ref={uploadRef} hidden type="file" accept="image/*" onChange={changeBackground} /><button className="upload" onClick={() => uploadRef.current?.click()}>选择本地图片</button>{background && <button onClick={removeBackground}>恢复默认</button>}</div>{background && <div className="sliders"><label>遮罩强度 <input type="range" min="0" max="85" value={overlay} onChange={(event) => setOverlay(+event.target.value)} /><b>{overlay}%</b></label><label>背景模糊 <input type="range" min="0" max="16" value={blur} onChange={(event) => setBlur(+event.target.value)} /><b>{blur}px</b></label></div>}</article></section>}
     </section>
 
     {showNumbers && <div className="number-modal" role="dialog" aria-modal="true" aria-label="选择题号"><button className="modal-backdrop" onClick={() => setShowNumbers(false)} aria-label="关闭题号面板" /><section className="number-panel"><header><div><h3>选择题号</h3><p><span className="dot correct" />正确 <span className="dot wrong" />错误 <span className="dot corrected" />先错后对</p></div><button onClick={() => setShowNumbers(false)}>×</button></header><div className="number-grid">{visibleNumbers.map((item) => <button key={item.id} className={`${numberStatus(item)} ${item.id === current.id ? "current" : ""}`} onClick={() => moveTo(item)}>{item.id}</button>)}</div><footer><button disabled={numberPage === 0} onClick={() => setNumberPage(numberPage - 1)}>← 上100题</button><span>{numberPage + 1} / {numberPages}</span><button disabled={numberPage >= numberPages - 1} onClick={() => setNumberPage(numberPage + 1)}>下100题 →</button></footer></section></div>}
   </main>;
+}
+
+function StatisticsPage({ quiz, words, onReset }: { quiz: QuizStore; words: Word[]; onReset: () => void }) {
+  const dailyEntries = Object.entries(quiz.statistics.daily).sort(([a], [b]) => a.localeCompare(b)).slice(-7);
+  const days = dailyEntries.length ? dailyEntries : [[quiz.daily.date, { answered: 0, correct: 0, wrong: 0 }]] as typeof dailyEntries;
+  const maxDaily = Math.max(1, ...days.map(([, value]) => value.answered));
+  const wordStats = Object.values(quiz.statistics.words);
+  const totals = wordStats.reduce((sum, item) => ({ answered: sum.answered + item.answered, correct: sum.correct + item.correct, wrong: sum.wrong + item.wrong }), { answered: 0, correct: 0, wrong: 0 });
+  const correctPercent = totals.answered ? Math.round(totals.correct / totals.answered * 100) : 0;
+  const rangeSize = Math.max(1, Math.ceil(words.length / 10));
+  const ranges = Array.from({ length: Math.ceil(words.length / rangeSize) }, (_, rangeIndex) => {
+    const items = words.slice(rangeIndex * rangeSize, (rangeIndex + 1) * rangeSize);
+    const values = items.map((item) => quiz.statistics.words[item.word]).filter(Boolean);
+    const answered = values.reduce((sum, item) => sum + item.answered, 0);
+    const correct = values.reduce((sum, item) => sum + item.correct, 0);
+    return { label: `${rangeIndex * rangeSize + 1}-${Math.min((rangeIndex + 1) * rangeSize, words.length)}`, accuracy: answered ? Math.round(correct / answered * 100) : 0 };
+  });
+  const ranking = words.map((item) => ({ ...item, wrong: quiz.statistics.words[item.word]?.wrong || 0, answered: quiz.statistics.words[item.word]?.answered || 0 })).filter((item) => item.wrong).sort((a, b) => b.wrong - a.wrong || a.id - b.id).slice(0, 10);
+
+  return <section className="stats-view"><header className="section-title"><div><p className="eyebrow">STATISTICS</p><h2>刷题统计</h2><p>统计数据从启用本页面后开始精确累计。</p></div><button className="reset-records" onClick={onReset}>重置刷题记录</button></header>
+    <article className="stats-card"><h3>每日刷题数量</h3><div className="daily-chart" role="img" aria-label="最近七个有记录日期的刷题数量">{days.map(([date, value]) => <div className="daily-column" key={date}><span>{value.answered || ""}</span><i style={{ height: `${Math.max(value.answered ? 8 : 1, value.answered / maxDaily * 100)}%` }} /><small>{date.slice(5)}</small></div>)}</div></article>
+    <article className="stats-card"><h3>正确 / 错误占比</h3><div className="ratio-layout"><div className="ratio-donut" style={{ "--correct": `${correctPercent * 3.6}deg` } as React.CSSProperties}><strong>{correctPercent}%</strong><small>正确率</small></div><div className="ratio-legend"><p><i className="correct" />正确 <b>{totals.correct}</b></p><p><i className="wrong" />错误 <b>{totals.wrong}</b></p><p>共作答 <b>{totals.answered}</b> 次</p></div></div></article>
+    <article className="stats-card range-card"><h3>题号区间正确率</h3><div className="range-chart" role="img" aria-label="各题号区间正确率">{ranges.map((range) => <div className="range-row" key={range.label}><span>{range.label}</span><div><i style={{ width: `${range.accuracy}%` }} /></div><b>{range.accuracy}%</b></div>)}</div></article>
+    <article className="stats-card"><h3>错题最多排行</h3>{ranking.length ? <div className="wrong-ranking">{ranking.map((item, index) => <div key={item.id}><b>{index + 1}</b><span><strong>{item.word}</strong><small>{item.meaning}</small></span><em>{item.wrong} 次错误</em></div>)}</div> : <div className="stats-empty">暂无错题统计，开始答题后会显示。</div>}</article>
+  </section>;
 }
 
 function WordTable({ items, quiz }: { items: Word[]; quiz: QuizStore }) {
