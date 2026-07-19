@@ -170,9 +170,10 @@ export default function Home() {
     : spellingAnswer.trim().toLowerCase() === current?.word.toLowerCase();
   const submitAnswer = () => {
     if (!current || answered || (mode === "choice" ? !selectedAnswer : !spellingAnswer.trim())) return;
-    setAnswered(true);
+    if (answerCorrect) markWord("known");
+    else setAnswered(true);
   };
-  const nextQuestion = () => markWord(answerCorrect ? "known" : "unknown");
+  const nextQuestion = () => markWord("unknown");
   const nav = (next: View) => { setView(next); setQuery(""); };
 
   return (
