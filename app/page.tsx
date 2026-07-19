@@ -6,7 +6,7 @@ import {
   dailyCompletedCount,
   emptyQuizStore,
   loadQuizStore,
-  markDailyCorrect,
+  markModeMastered,
   nextReviewItem,
   QuizMode,
   QuizScope,
@@ -15,6 +15,7 @@ import {
   removeWrong,
   saveQuizStore,
   shouldRemoveSpellingWrong,
+  updateWordCompletion,
   todayKey,
 } from "./quiz-storage";
 
@@ -220,8 +221,12 @@ export default function Home() {
       };
       if (!correct) addWrong(next, "choice", current.word);
       recordAttempt(next, current.word, correct);
-      if (correct && scope === "standard") markDailyCorrect(next, "choice", current.word);
-      if (correct && scope === "review") removeWrong(next, "choice", current.word);
+      if (correct && scope === "standard") markModeMastered(next, "choice", current.word);
+      if (correct && scope === "review") {
+        removeWrong(next, "choice", current.word);
+        markModeMastered(next, "choice", current.word);
+        updateWordCompletion(next, current.word);
+      }
       if (correct) next.positions[scope].choice = nextWord?.id || 1;
     });
     if (correct) nextAfterCorrect(nextWord);
@@ -270,10 +275,12 @@ export default function Home() {
       };
       if (!correct) addWrong(next, "spelling", current.word);
       recordAttempt(next, current.word, correct);
-      if (correct && scope === "standard") markDailyCorrect(next, "spelling", current.word);
+      if (correct && scope === "standard") markModeMastered(next, "spelling", current.word);
       if (correct && scope === "review") {
         if (removeOnCorrect) {
           removeWrong(next, "spelling", current.word);
+          markModeMastered(next, "spelling", current.word);
+          updateWordCompletion(next, current.word);
           delete next.spellingReview.passedRounds[current.word];
         } else {
           next.spellingReview.passedRounds[current.word] = passedRounds + 1;

@@ -4,7 +4,7 @@ import {
   addWrong,
   dailyCompletedCount,
   emptyQuizStore,
-  markDailyCorrect,
+  markModeMastered,
   nextReviewItem,
   removeWrong,
   recordAttempt,
@@ -13,11 +13,22 @@ import {
 
 test("daily progress counts a word only after both modes are correct", () => {
   const store = emptyQuizStore();
-  markDailyCorrect(store, "choice", "consistent");
+  markModeMastered(store, "choice", "consistent");
   assert.equal(dailyCompletedCount(store), 0);
-  markDailyCorrect(store, "spelling", "consistent");
+  markModeMastered(store, "spelling", "consistent");
   assert.equal(dailyCompletedCount(store), 1);
-  markDailyCorrect(store, "choice", "consistent");
+  markModeMastered(store, "choice", "consistent");
+  assert.equal(dailyCompletedCount(store), 1);
+});
+
+test("a corrected word does not count while it remains in either wrong book", () => {
+  const store = emptyQuizStore();
+  addWrong(store, "spelling", "battery");
+  markModeMastered(store, "choice", "battery");
+  markModeMastered(store, "spelling", "battery");
+  assert.equal(dailyCompletedCount(store), 0);
+  removeWrong(store, "spelling", "battery");
+  markModeMastered(store, "spelling", "battery");
   assert.equal(dailyCompletedCount(store), 1);
 });
 

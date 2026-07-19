@@ -31,6 +31,11 @@ export type QuizStore = {
     daily: Record<string, { answered: number; correct: number; wrong: number }>;
     words: Record<string, { answered: number; correct: number; wrong: number }>;
   };
+  mastery: {
+    choice: string[];
+    spelling: string[];
+    completedOn: Record<string, string>;
+  };
 };
 
 export const QUIZ_KEY = "cet6-quiz-v2";
@@ -55,6 +60,7 @@ export function emptyQuizStore(): QuizStore {
     daily: { date: todayKey(), choiceCorrect: [], spellingCorrect: [] },
     spellingReview: { completedThisRound: [], passedRounds: {} },
     statistics: { daily: {}, words: {} },
+    mastery: { choice: [], spelling: [], completedOn: {} },
   };
 }
 
@@ -93,8 +99,12 @@ export function loadQuizStore(): QuizStore {
       daily: parsed.daily || fallback.daily,
       spellingReview: parsed.spellingReview || fallback.spellingReview,
       statistics: parsed.statistics || fallback.statistics,
+      mastery: parsed.mastery || fallback.mastery,
     };
     if (store.daily.date !== todayKey()) store.daily = fallback.daily;
+    for (const word of store.daily.choiceCorrect) if (!store.mastery.choice.includes(word)) store.mastery.choice.push(word);
+    for (const word of store.daily.spellingCorrect) if (!store.mastery.spelling.includes(word)) store.mastery.spelling.push(word);
+    for (const word of store.mastery.choice) updateWordCompletion(store, word);
     return store;
   } catch {
     return fallback;
@@ -116,8 +126,7 @@ export function saveQuizStore(store: QuizStore) {
 }
 
 export function dailyCompletedCount(store: QuizStore) {
-  const spelling = new Set(store.daily.spellingCorrect);
-  return new Set(store.daily.choiceCorrect.filter((word) => spelling.has(word))).size;
+  return Object.values(store.mastery.completedOn).filter((date) => date === store.daily.date).length;
 }
 
 export function addWrong(store: QuizStore, mode: QuizMode, word: string) {
@@ -131,6 +140,20 @@ export function removeWrong(store: QuizStore, mode: QuizMode, word: string) {
 export function markDailyCorrect(store: QuizStore, mode: QuizMode, word: string) {
   const key = mode === "choice" ? "choiceCorrect" : "spellingCorrect";
   if (!store.daily[key].includes(word)) store.daily[key].push(word);
+}
+
+export function markModeMastered(store: QuizStore, mode: QuizMode, word: string) {
+  if (!store.mastery[mode].includes(word)) store.mastery[mode].push(word);
+  updateWordCompletion(store, word);
+}
+
+export function updateWordCompletion(store: QuizStore, word: string) {
+  if (store.mastery.completedOn[word]) return;
+  const ready = store.mastery.choice.includes(word)
+    && store.mastery.spelling.includes(word)
+    && !store.wrong.choice.includes(word)
+    && !store.wrong.spelling.includes(word);
+  if (ready) store.mastery.completedOn[word] = store.daily.date;
 }
 
 export function nextReviewItem<T>(items: T[], currentIndex: number) {
