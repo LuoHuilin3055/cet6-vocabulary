@@ -4,7 +4,7 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type Word = { id: number; word: string; meaning: string };
 type Mark = "known" | "fuzzy" | "unknown";
-type Mode = "en-zh" | "zh-en";
+type Mode = "choice" | "spelling";
 type Theme = "light" | "dark" | "system";
 type View = "home" | "study" | "wrong" | "words" | "settings";
 type Progress = Record<string, { mark: Mark; seen: number; updated: number }>;
@@ -55,12 +55,14 @@ export default function Home() {
   const [words, setWords] = useState<Word[]>([]);
   const [progress, setProgress] = useState<Progress>({});
   const [view, setView] = useState<View>("home");
-  const [mode, setMode] = useState<Mode>("en-zh");
+  const [mode, setMode] = useState<Mode>("choice");
   const [theme, setTheme] = useState<Theme>("system");
   const [sessionSize, setSessionSize] = useState(50);
   const [session, setSession] = useState<Word[]>([]);
   const [index, setIndex] = useState(0);
-  const [revealed, setRevealed] = useState(false);
+  const [selectedAnswer, setSelectedAnswer] = useState("");
+  const [spellingAnswer, setSpellingAnswer] = useState("");
+  const [answered, setAnswered] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | Mark>("all");
   const [background, setBackground] = useState<string | null>(null);
@@ -113,7 +115,9 @@ export default function Home() {
     setMode(nextMode);
     setSession(shuffle(source).slice(0, Math.min(sessionSize, source.length)));
     setIndex(0);
-    setRevealed(false);
+    setSelectedAnswer("");
+    setSpellingAnswer("");
+    setAnswered(false);
     setView("study");
   };
 
@@ -128,7 +132,9 @@ export default function Home() {
     localStorage.setItem(PROGRESS_KEY, JSON.stringify(next));
     if (index < session.length - 1) {
       setIndex(index + 1);
-      setRevealed(false);
+      setSelectedAnswer("");
+      setSpellingAnswer("");
+      setAnswered(false);
     } else setView("home");
   };
 
@@ -154,6 +160,19 @@ export default function Home() {
 
   const wrongWords = words.filter((w) => progress[w.word]?.mark === "fuzzy" || progress[w.word]?.mark === "unknown");
   const current = session[index];
+  const choices = useMemo(() => {
+    if (!current || mode !== "choice") return [];
+    const distractors = shuffle(words.filter((item) => item.word !== current.word)).slice(0, 3);
+    return shuffle([current, ...distractors]);
+  }, [current, mode, words]);
+  const answerCorrect = mode === "choice"
+    ? selectedAnswer === current?.word
+    : spellingAnswer.trim().toLowerCase() === current?.word.toLowerCase();
+  const submitAnswer = () => {
+    if (!current || answered || (mode === "choice" ? !selectedAnswer : !spellingAnswer.trim())) return;
+    setAnswered(true);
+  };
+  const nextQuestion = () => markWord(answerCorrect ? "known" : "unknown");
   const nav = (next: View) => { setView(next); setQuery(""); };
 
   return (
@@ -164,7 +183,7 @@ export default function Home() {
         <button className="brand" onClick={() => nav("home")}><span>六</span><b>六级单词</b></button>
         <nav>
           <button className={view === "home" ? "active" : ""} onClick={() => nav("home")}><i>⌂</i>首页</button>
-          <button className={view === "study" ? "active" : ""} onClick={() => startStudy("en-zh")}><i>▣</i>学习</button>
+          <button className={view === "study" ? "active" : ""} onClick={() => startStudy("choice")}><i>▣</i>答题</button>
           <button className={view === "wrong" ? "active" : ""} onClick={() => nav("wrong")}><i>◇</i>错词本</button>
           <button className={view === "words" ? "active" : ""} onClick={() => nav("words")}><i>☷</i>单词列表</button>
           <button className={view === "settings" ? "active" : ""} onClick={() => nav("settings")}><i>⚙</i>设置</button>
@@ -182,31 +201,31 @@ export default function Home() {
           <section className="dashboard-grid">
             <article className="welcome-card"><span className="leaf">❧</span><p>今日学习</p><h2>{stats.learned ? "继续保持，你已经在进步了" : "从今天的第一个单词开始"}</h2><div className="stat-row"><b>{stats.learned}</b><span>已学习</span><b>{stats.known}</b><span>已掌握</span><b>{wrongWords.length}</b><span>待复习</span></div></article>
             <article className="progress-card"><div className="ring" style={{ "--percent": `${Math.min(100, Math.round(stats.learned / Math.max(words.length, 1) * 100)) * 3.6}deg` } as React.CSSProperties}><span>{Math.round(stats.learned / Math.max(words.length, 1) * 100)}%</span></div><div><p>词库总进度</p><h3>{stats.learned} <small>/ {words.length || 5651} 词</small></h3><div className="legend"><span>● 已掌握 {stats.known}</span><span>● 模糊 {stats.fuzzy}</span><span>● 不认识 {stats.unknown}</span></div></div></article>
-            <button className="study-card en" onClick={() => startStudy("en-zh")}><span className="language-icon">A<small>中</small></span><div><h2>英译中</h2><p>显示英文，回忆中文释义</p><b>开始学习 →</b></div></button>
-            <button className="study-card zh" onClick={() => startStudy("zh-en")}><span className="language-icon">中<small>A</small></span><div><h2>中译英</h2><p>显示中文，回忆英文单词</p><b>开始学习 →</b></div></button>
+            <button className="study-card en" onClick={() => startStudy("choice")}><span className="language-icon">A<small>?</small></span><div><h2>选择题</h2><p>根据英文选择正确的中文释义</p><b>开始答题 →</b></div></button>
+            <button className="study-card zh" onClick={() => startStudy("spelling")}><span className="language-icon">中<small>✎</small></span><div><h2>拼写题</h2><p>根据中文释义拼写英文单词</p><b>开始答题 →</b></div></button>
             <button className="mini-card" onClick={() => nav("wrong")}><span>▱</span><div><h3>错词本</h3><p>{wrongWords.length} 个单词等待复习</p></div><b>›</b></button>
             <button className="mini-card" onClick={() => nav("words")}><span>☷</span><div><h3>单词列表</h3><p>搜索并浏览全部词汇</p></div><b>›</b></button>
           </section>
         </>}
 
         {view === "study" && current && <section className="study-view">
-          <header className="page-head"><button onClick={() => nav("home")}>← 返回首页</button><span>{mode === "en-zh" ? "英译中" : "中译英"} · {index + 1} / {session.length}</span></header>
+          <header className="page-head"><button onClick={() => nav("home")}>← 返回首页</button><span>{mode === "choice" ? "选择题" : "拼写题"} · {index + 1} / {session.length}</span></header>
           <div className="study-progress"><i style={{ width: `${(index + 1) / session.length * 100}%` }} /></div>
           <article className="flashcard">
-            <p className="prompt-label">{mode === "en-zh" ? "看到英文，想一想它的中文意思" : "看到中文，想一想对应的英文单词"}</p>
-            <h2>{mode === "en-zh" ? current.word : current.meaning}</h2>
-            {revealed ? <div className="answer"><span>答案</span><strong>{mode === "en-zh" ? current.meaning : current.word}</strong></div> : <button className="reveal" onClick={() => setRevealed(true)}>查看答案</button>}
+            <p className="prompt-label">{mode === "choice" ? "请选择正确的中文释义" : "请根据中文释义拼写英文单词"}</p>
+            <h2>{mode === "choice" ? current.word : current.meaning}</h2>
+            {mode === "choice" ? <div className="choice-grid">{choices.map((item) => <button key={item.word} disabled={answered} className={`${selectedAnswer === item.word ? "selected" : ""} ${answered && item.word === current.word ? "correct" : ""} ${answered && selectedAnswer === item.word && item.word !== current.word ? "incorrect" : ""}`} onClick={() => setSelectedAnswer(item.word)}>{item.meaning}</button>)}</div> : <input className="spelling-input" disabled={answered} value={spellingAnswer} onChange={(event) => setSpellingAnswer(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitAnswer()} placeholder="输入英文单词" autoComplete="off" autoCapitalize="none" spellCheck={false} />}
+            {!answered ? <button className="reveal" disabled={mode === "choice" ? !selectedAnswer : !spellingAnswer.trim()} onClick={submitAnswer}>提交答案</button> : <div className={`answer-result ${answerCorrect ? "correct" : "incorrect"}`}><strong>{answerCorrect ? "回答正确" : "回答错误"}</strong>{!answerCorrect && <span>正确答案：{mode === "choice" ? current.meaning : current.word}</span>}<button onClick={nextQuestion}>{index < session.length - 1 ? "下一题 →" : "完成本轮"}</button></div>}
           </article>
-          {revealed && <div className="mark-actions"><button className="unknown" onClick={() => markWord("unknown")}>不认识 <small>需要重点复习</small></button><button className="fuzzy" onClick={() => markWord("fuzzy")}>有点模糊 <small>稍后再看一次</small></button><button className="known" onClick={() => markWord("known")}>认识 <small>我已经掌握了</small></button></div>}
         </section>}
 
-        {view === "wrong" && <section className="list-view"><header className="section-title"><div><p className="eyebrow">REVIEW</p><h2>错词本</h2><p>模糊和不认识的单词都会在这里。</p></div><button disabled={!wrongWords.length} onClick={() => startStudy("en-zh", true)}>复习错词</button></header><WordTable items={wrongWords} progress={progress} /></section>}
+        {view === "wrong" && <section className="list-view"><header className="section-title"><div><p className="eyebrow">REVIEW</p><h2>错词本</h2><p>答错的单词都会自动加入这里。</p></div><button disabled={!wrongWords.length} onClick={() => startStudy("choice", true)}>选择题复习</button></header><WordTable items={wrongWords} progress={progress} /></section>}
 
         {view === "words" && <section className="list-view"><header className="section-title"><div><p className="eyebrow">ALL WORDS</p><h2>单词列表</h2><p>共 {words.length} 个单词，支持中英文搜索。</p></div></header><div className="filters"><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索英文或中文释义…"/><select value={filter} onChange={(e) => setFilter(e.target.value as typeof filter)}><option value="all">全部状态</option><option value="known">已掌握</option><option value="fuzzy">模糊</option><option value="unknown">不认识</option></select></div><WordTable items={filteredWords.slice(0, 300)} progress={progress} /><p className="table-tip">{filteredWords.length > 300 ? `结果较多，当前显示前 300 条（共 ${filteredWords.length} 条）` : `共 ${filteredWords.length} 条`}</p></section>}
 
         {view === "settings" && <section className="settings-view"><header className="section-title"><div><p className="eyebrow">PREFERENCES</p><h2>设置</h2><p>把学习页面调整成你喜欢的样子。</p></div></header>
           <article className="setting-card"><div><h3>白天与黑夜模式</h3><p>可以手动切换，也可以跟随电脑系统。</p></div><div className="segmented"><button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")}>☀ 白天</button><button className={theme === "system" ? "active" : ""} onClick={() => setTheme("system")}>跟随系统</button><button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")}>☾ 黑夜</button></div></article>
-          <article className="setting-card"><div><h3>每轮单词数量</h3><p>选择一次想学习多少个单词。</p></div><div className="segmented">{[10,20,50,100].map((n) => <button key={n} className={sessionSize === n ? "active" : ""} onClick={() => setSessionSize(n)}>{n}</button>)}</div></article>
+          <article className="setting-card"><div><h3>每轮题目数量</h3><p>选择一次想完成多少道题。</p></div><div className="segmented">{[10,20,50,100].map((n) => <button key={n} className={sessionSize === n ? "active" : ""} onClick={() => setSessionSize(n)}>{n}</button>)}</div></article>
           <article className="setting-card background-setting"><div><h3>自定义背景图片</h3><p>图片只保存在你的浏览器中，不会上传到服务器。最大 12MB。</p></div><div className="background-actions"><input ref={uploadRef} hidden type="file" accept="image/*" onChange={changeBackground}/><button className="upload" onClick={() => uploadRef.current?.click()}>选择本地图片</button>{background && <button onClick={removeBackground}>恢复默认</button>}</div>{background && <div className="sliders"><label>遮罩强度 <input type="range" min="0" max="85" value={overlay} onChange={(e) => setOverlay(+e.target.value)}/><b>{overlay}%</b></label><label>背景模糊 <input type="range" min="0" max="16" value={blur} onChange={(e) => setBlur(+e.target.value)}/><b>{blur}px</b></label></div>}</article>
         </section>}
       </section>
