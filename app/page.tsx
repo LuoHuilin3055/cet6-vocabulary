@@ -11,7 +11,13 @@ type Progress = Record<string, { mark: Mark; seen: number; updated: number }>;
 
 const PROGRESS_KEY = "cet6-progress-v1";
 const SETTINGS_KEY = "cet6-settings-v1";
+const DAILY_KEY = "cet6-daily-v1";
 const BG_DB = "cet6-background";
+
+function todayKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
 
 function shuffle<T>(items: T[]) {
   const copy = [...items];
@@ -58,6 +64,7 @@ export default function Home() {
   const [mode, setMode] = useState<Mode>("choice");
   const [theme, setTheme] = useState<Theme>("system");
   const [sessionSize, setSessionSize] = useState(50);
+  const [dailyCount, setDailyCount] = useState(0);
   const [session, setSession] = useState<Word[]>([]);
   const [index, setIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState("");
@@ -80,6 +87,8 @@ export default function Home() {
         if (saved.sessionSize) setSessionSize(saved.sessionSize);
         if (typeof saved.overlay === "number") setOverlay(saved.overlay);
         if (typeof saved.blur === "number") setBlur(saved.blur);
+        const daily = JSON.parse(localStorage.getItem(DAILY_KEY) || "{}");
+        if (daily.date === todayKey() && typeof daily.count === "number") setDailyCount(daily.count);
       } catch { /* keep defaults */ }
     });
     loadBackground().then(setBackground);
@@ -108,6 +117,10 @@ export default function Home() {
   }, [progress]);
 
   const startStudy = (nextMode: Mode, wrongOnly = false) => {
+    if (!wrongOnly && session.length && mode === nextMode) {
+      setView("study");
+      return;
+    }
     const source = wrongOnly
       ? words.filter((w) => progress[w.word]?.mark !== "known" && progress[w.word])
       : words;
@@ -135,7 +148,20 @@ export default function Home() {
       setSelectedAnswer("");
       setSpellingAnswer("");
       setAnswered(false);
-    } else setView("home");
+    } else {
+      setSession([]);
+      setIndex(0);
+      setSelectedAnswer("");
+      setSpellingAnswer("");
+      setAnswered(false);
+      setView("home");
+    }
+  };
+
+  const recordDailyAnswer = () => {
+    const next = dailyCount + 1;
+    setDailyCount(next);
+    localStorage.setItem(DAILY_KEY, JSON.stringify({ date: todayKey(), count: next }));
   };
 
   const changeBackground = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -170,6 +196,7 @@ export default function Home() {
     : spellingAnswer.trim().toLowerCase() === current?.word.toLowerCase();
   const submitAnswer = () => {
     if (!current || answered || (mode === "choice" ? !selectedAnswer : !spellingAnswer.trim())) return;
+    recordDailyAnswer();
     if (answerCorrect) markWord("known");
     else setAnswered(true);
   };
@@ -201,7 +228,7 @@ export default function Home() {
           <header className="topbar"><div><p className="eyebrow">CET-6 VOCABULARY</p><h1>六级单词 <em>{words.length || "…"}词</em></h1></div><p>每天一点，慢慢把陌生变熟悉。</p></header>
           <section className="dashboard-grid">
             <article className="welcome-card"><span className="leaf">❧</span><p>今日学习</p><h2>{stats.learned ? "继续保持，你已经在进步了" : "从今天的第一个单词开始"}</h2><div className="stat-row"><b>{stats.learned}</b><span>已学习</span><b>{stats.known}</b><span>已掌握</span><b>{wrongWords.length}</b><span>待复习</span></div></article>
-            <article className="progress-card"><div className="ring" style={{ "--percent": `${Math.min(100, Math.round(stats.learned / Math.max(words.length, 1) * 100)) * 3.6}deg` } as React.CSSProperties}><span>{Math.round(stats.learned / Math.max(words.length, 1) * 100)}%</span></div><div><p>词库总进度</p><h3>{stats.learned} <small>/ {words.length || 5651} 词</small></h3><div className="legend"><span>● 已掌握 {stats.known}</span><span>● 模糊 {stats.fuzzy}</span><span>● 不认识 {stats.unknown}</span></div></div></article>
+            <article className="progress-card"><div className="ring" style={{ "--percent": `${Math.min(100, Math.round(dailyCount / Math.max(sessionSize, 1) * 100)) * 3.6}deg` } as React.CSSProperties}><span>{Math.min(100, Math.round(dailyCount / Math.max(sessionSize, 1) * 100))}%</span></div><div className="progress-details"><p>今日进度</p><h3>{dailyCount} <small>/ {sessionSize} 题</small></h3><div className="daily-bar"><i style={{ width: `${Math.min(100, dailyCount / Math.max(sessionSize, 1) * 100)}%` }} /></div><div className="legend"><span>● 词库已练 {stats.learned}</span><span>● 已掌握 {stats.known}</span><span>● 待复习 {wrongWords.length}</span></div></div></article>
             <button className="study-card en" onClick={() => startStudy("choice")}><span className="language-icon">A<small>?</small></span><div><h2>选择题</h2><p>根据英文选择正确的中文释义</p><b>开始答题 →</b></div></button>
             <button className="study-card zh" onClick={() => startStudy("spelling")}><span className="language-icon">中<small>✎</small></span><div><h2>拼写题</h2><p>根据中文释义拼写英文单词</p><b>开始答题 →</b></div></button>
             <button className="mini-card" onClick={() => nav("wrong")}><span>▱</span><div><h3>错词本</h3><p>{wrongWords.length} 个单词等待复习</p></div><b>›</b></button>
@@ -210,9 +237,10 @@ export default function Home() {
         </>}
 
         {view === "study" && current && <section className="study-view">
-          <header className="page-head"><button onClick={() => nav("home")}>← 返回首页</button><span>{mode === "choice" ? "选择题" : "拼写题"} · {index + 1} / {session.length}</span></header>
+          <header className="page-head"><button onClick={() => nav("home")}>← 返回首页</button><span>{mode === "choice" ? "选择题" : "拼写题"}</span></header>
           <div className="study-progress"><i style={{ width: `${(index + 1) / session.length * 100}%` }} /></div>
           <article className="flashcard">
+            <div className="question-number">第 {index + 1} 题 <small>/ 共 {session.length} 题</small></div>
             <p className="prompt-label">{mode === "choice" ? "请选择正确的中文释义" : "请根据中文释义拼写英文单词"}</p>
             <h2>{mode === "choice" ? current.word : current.meaning}</h2>
             {mode === "choice" ? <div className="choice-grid">{choices.map((item) => <button key={item.word} disabled={answered} className={`${selectedAnswer === item.word ? "selected" : ""} ${answered && item.word === current.word ? "correct" : ""} ${answered && selectedAnswer === item.word && item.word !== current.word ? "incorrect" : ""}`} onClick={() => setSelectedAnswer(item.word)}>{item.meaning}</button>)}</div> : <input className="spelling-input" disabled={answered} value={spellingAnswer} onChange={(event) => setSpellingAnswer(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitAnswer()} placeholder="输入英文单词" autoComplete="off" autoCapitalize="none" spellCheck={false} />}
