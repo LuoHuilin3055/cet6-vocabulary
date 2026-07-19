@@ -19,15 +19,6 @@ function todayKey() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
-function shuffle<T>(items: T[]) {
-  const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-}
-
 function saveBackground(file?: File): Promise<string | null> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(BG_DB, 1);
@@ -126,7 +117,7 @@ export default function Home() {
       : words;
     if (!source.length) return;
     setMode(nextMode);
-    setSession(shuffle(source).slice(0, Math.min(sessionSize, source.length)));
+    setSession(source);
     setIndex(0);
     setSelectedAnswer("");
     setSpellingAnswer("");
@@ -139,7 +130,7 @@ export default function Home() {
     if (!current) return;
     const next = {
       ...progress,
-      [current.word]: { mark, seen: (progress[current.word]?.seen || 0) + 1, updated: Date.now() },
+      [current.word]: { mark, seen: (progress[current.word]?.seen || 0) + 1, updated: (progress[current.word]?.updated || 0) + 1 },
     };
     setProgress(next);
     localStorage.setItem(PROGRESS_KEY, JSON.stringify(next));
@@ -188,19 +179,48 @@ export default function Home() {
   const current = session[index];
   const choices = useMemo(() => {
     if (!current || mode !== "choice") return [];
-    const distractors = shuffle(words.filter((item) => item.word !== current.word)).slice(0, 3);
-    return shuffle([current, ...distractors]);
+    const currentPosition = words.findIndex((item) => item.id === current.id);
+    const options = [current];
+    for (let offset = 1; options.length < 4 && offset < words.length; offset++) {
+      const candidate = words[(currentPosition + offset) % words.length];
+      if (candidate.word !== current.word) options.push(candidate);
+    }
+    const rotation = current.id % options.length;
+    return [...options.slice(rotation), ...options.slice(0, rotation)];
   }, [current, mode, words]);
   const answerCorrect = mode === "choice"
     ? selectedAnswer === current?.word
     : spellingAnswer.trim().toLowerCase() === current?.word.toLowerCase();
   const submitAnswer = () => {
-    if (!current || answered || (mode === "choice" ? !selectedAnswer : !spellingAnswer.trim())) return;
+    if (!current || answered || !spellingAnswer.trim()) return;
     recordDailyAnswer();
     if (answerCorrect) markWord("known");
     else setAnswered(true);
   };
+  const chooseAnswer = (word: string) => {
+    if (!current || answered) return;
+    setSelectedAnswer(word);
+    recordDailyAnswer();
+    if (word === current.word) markWord("known");
+    else setAnswered(true);
+  };
   const nextQuestion = () => markWord("unknown");
+  const moveQuestion = (direction: -1 | 1) => {
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= session.length) return;
+    if (answered) {
+      const nextProgress = {
+        ...progress,
+        [current.word]: { mark: "unknown" as Mark, seen: (progress[current.word]?.seen || 0) + 1, updated: (progress[current.word]?.updated || 0) + 1 },
+      };
+      setProgress(nextProgress);
+      localStorage.setItem(PROGRESS_KEY, JSON.stringify(nextProgress));
+    }
+    setIndex(nextIndex);
+    setSelectedAnswer("");
+    setSpellingAnswer("");
+    setAnswered(false);
+  };
   const nav = (next: View) => { setView(next); setQuery(""); };
 
   return (
@@ -239,12 +259,12 @@ export default function Home() {
         {view === "study" && current && <section className="study-view">
           <header className="page-head"><button onClick={() => nav("home")}>← 返回首页</button><span>{mode === "choice" ? "选择题" : "拼写题"}</span></header>
           <div className="study-progress"><i style={{ width: `${(index + 1) / session.length * 100}%` }} /></div>
+          <div className="question-toolbar"><button disabled={index === 0} onClick={() => moveQuestion(-1)}>← 上一题</button><strong>题号 {current.id} <small>/ {words.length}</small></strong><button disabled={index === session.length - 1} onClick={() => moveQuestion(1)}>下一题 →</button></div>
           <article className="flashcard">
-            <div className="question-number">第 {index + 1} 题 <small>/ 共 {session.length} 题</small></div>
             <p className="prompt-label">{mode === "choice" ? "请选择正确的中文释义" : "请根据中文释义拼写英文单词"}</p>
             <h2>{mode === "choice" ? current.word : current.meaning}</h2>
-            {mode === "choice" ? <div className="choice-grid">{choices.map((item) => <button key={item.word} disabled={answered} className={`${selectedAnswer === item.word ? "selected" : ""} ${answered && item.word === current.word ? "correct" : ""} ${answered && selectedAnswer === item.word && item.word !== current.word ? "incorrect" : ""}`} onClick={() => setSelectedAnswer(item.word)}>{item.meaning}</button>)}</div> : <input className="spelling-input" disabled={answered} value={spellingAnswer} onChange={(event) => setSpellingAnswer(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitAnswer()} placeholder="输入英文单词" autoComplete="off" autoCapitalize="none" spellCheck={false} />}
-            {!answered ? <button className="reveal" disabled={mode === "choice" ? !selectedAnswer : !spellingAnswer.trim()} onClick={submitAnswer}>提交答案</button> : <div className={`answer-result ${answerCorrect ? "correct" : "incorrect"}`}><strong>{answerCorrect ? "回答正确" : "回答错误"}</strong>{!answerCorrect && <span>正确答案：{mode === "choice" ? current.meaning : current.word}</span>}<button onClick={nextQuestion}>{index < session.length - 1 ? "下一题 →" : "完成本轮"}</button></div>}
+            {mode === "choice" ? <div className="choice-grid">{choices.map((item) => <button key={item.word} disabled={answered} className={`${selectedAnswer === item.word ? "selected" : ""} ${answered && item.word === current.word ? "correct" : ""} ${answered && selectedAnswer === item.word && item.word !== current.word ? "incorrect" : ""}`} onClick={() => chooseAnswer(item.word)}>{item.meaning}</button>)}</div> : <><input className="spelling-input" disabled={answered} value={spellingAnswer} onChange={(event) => setSpellingAnswer(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitAnswer()} placeholder="输入英文单词，按 Enter 判断" autoComplete="off" autoCapitalize="none" spellCheck={false} />{!answered && <p className="enter-tip">按 Enter 键判断正误</p>}</>}
+            {answered && <div className="answer-result incorrect"><strong>回答错误</strong><span>正确答案：{mode === "choice" ? current.meaning : current.word}</span><button onClick={nextQuestion}>{index < session.length - 1 ? "下一题 →" : "完成本轮"}</button></div>}
           </article>
         </section>}
 
@@ -254,7 +274,7 @@ export default function Home() {
 
         {view === "settings" && <section className="settings-view"><header className="section-title"><div><p className="eyebrow">PREFERENCES</p><h2>设置</h2><p>把学习页面调整成你喜欢的样子。</p></div></header>
           <article className="setting-card"><div><h3>白天与黑夜模式</h3><p>可以手动切换，也可以跟随电脑系统。</p></div><div className="segmented"><button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")}>☀ 白天</button><button className={theme === "system" ? "active" : ""} onClick={() => setTheme("system")}>跟随系统</button><button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")}>☾ 黑夜</button></div></article>
-          <article className="setting-card"><div><h3>每轮题目数量</h3><p>选择一次想完成多少道题。</p></div><div className="segmented">{[10,20,50,100].map((n) => <button key={n} className={sessionSize === n ? "active" : ""} onClick={() => setSessionSize(n)}>{n}</button>)}</div></article>
+          <article className="setting-card"><div><h3>每日答题目标</h3><p>设置首页每日进度的目标题数。</p></div><div className="segmented">{[10,20,50,100].map((n) => <button key={n} className={sessionSize === n ? "active" : ""} onClick={() => setSessionSize(n)}>{n}</button>)}</div></article>
           <article className="setting-card background-setting"><div><h3>自定义背景图片</h3><p>图片只保存在你的浏览器中，不会上传到服务器。最大 12MB。</p></div><div className="background-actions"><input ref={uploadRef} hidden type="file" accept="image/*" onChange={changeBackground}/><button className="upload" onClick={() => uploadRef.current?.click()}>选择本地图片</button>{background && <button onClick={removeBackground}>恢复默认</button>}</div>{background && <div className="sliders"><label>遮罩强度 <input type="range" min="0" max="85" value={overlay} onChange={(e) => setOverlay(+e.target.value)}/><b>{overlay}%</b></label><label>背景模糊 <input type="range" min="0" max="16" value={blur} onChange={(e) => setBlur(+e.target.value)}/><b>{blur}px</b></label></div>}</article>
         </section>}
       </section>
