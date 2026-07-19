@@ -119,3 +119,8 @@ export function markDailyCorrect(store: QuizStore, mode: QuizMode, word: string)
   const key = mode === "choice" ? "choiceCorrect" : "spellingCorrect";
   if (!store.daily[key].includes(word)) store.daily[key].push(word);
 }
+
+export function nextReviewItem<T>(items: T[], currentIndex: number) {
+  if (items.length <= 1) return undefined;
+  return items[(currentIndex + 1) % items.length];
+}

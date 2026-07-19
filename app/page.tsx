@@ -7,6 +7,7 @@ import {
   emptyQuizStore,
   loadQuizStore,
   markDailyCorrect,
+  nextReviewItem,
   QuizMode,
   QuizScope,
   QuizStore,
@@ -17,7 +18,7 @@ import {
 
 type Word = { id: number; word: string; meaning: string };
 type Theme = "light" | "dark" | "system";
-type View = "home" | "practice" | "wrong" | "words" | "settings";
+type View = "home" | "practice" | "wrong" | "review-complete" | "words" | "settings";
 
 const SETTINGS_KEY = "cet6-settings-v1";
 const BG_DB = "cet6-background";
@@ -59,6 +60,7 @@ export default function Home() {
   const [mode, setMode] = useState<QuizMode>("choice");
   const [scope, setScope] = useState<QuizScope>("standard");
   const [currentId, setCurrentId] = useState(1);
+  const [completedMode, setCompletedMode] = useState<QuizMode>("choice");
   const [spellingInput, setSpellingInput] = useState("");
   const [showNumbers, setShowNumbers] = useState(false);
   const [numberPage, setNumberPage] = useState(0);
@@ -149,6 +151,17 @@ export default function Home() {
     setShowNumbers(false);
   };
 
+  const relativeWord = (direction: -1 | 1) => {
+    if (!source.length) return undefined;
+    if (scope === "review") {
+      if (source.length <= 1) return undefined;
+      return source[(currentIndex + direction + source.length) % source.length];
+    }
+    return source[currentIndex + direction];
+  };
+
+  const moveRelative = (direction: -1 | 1) => moveTo(relativeWord(direction));
+
   const choiceOptions = useMemo(() => {
     if (!current || mode !== "choice" || !words.length) return [];
     const position = words.findIndex((item) => item.id === current.id);
@@ -163,13 +176,16 @@ export default function Home() {
 
   const nextAfterCorrect = (nextWord?: Word) => {
     if (nextWord) setCurrentId(nextWord.id);
-    else setView(scope === "review" ? "wrong" : "home");
+    else if (scope === "review") {
+      setCompletedMode(mode);
+      setView("review-complete");
+    } else setView("home");
   };
 
   const chooseAnswer = (answer: Word) => {
     if (!current || record?.showAnswer || record?.correct) return;
     const correct = answer.word === current.word;
-    const nextWord = source[currentIndex + 1];
+    const nextWord = scope === "review" ? nextReviewItem(source, currentIndex) : source[currentIndex + 1];
     updateQuiz((next) => {
       const previous = next.answers[scope].choice[current.word];
       next.answers[scope].choice[current.word] = {
@@ -208,7 +224,7 @@ export default function Home() {
     const answer = spellingInput.trim();
     if (!answer) return;
     const correct = answer.toLowerCase() === current.word.toLowerCase();
-    const nextWord = source[currentIndex + 1];
+    const nextWord = scope === "review" ? nextReviewItem(source, currentIndex) : source[currentIndex + 1];
     updateQuiz((next) => {
       const old = next.answers[scope].spelling[current.word];
       next.answers[scope].spelling[current.word] = {
@@ -288,21 +304,21 @@ export default function Home() {
       }
     }
     if (typing) {
-      if (mode === "spelling" && key === "arrowup" && currentIndex > 0) {
+      if (mode === "spelling" && key === "arrowup" && (scope === "review" ? source.length > 1 : currentIndex > 0)) {
         event.preventDefault();
-        moveTo(source[currentIndex - 1]);
-      } else if (mode === "spelling" && key === "arrowdown" && currentIndex < source.length - 1) {
+        moveRelative(-1);
+      } else if (mode === "spelling" && key === "arrowdown" && (scope === "review" ? source.length > 1 : currentIndex < source.length - 1)) {
         event.preventDefault();
-        moveTo(source[currentIndex + 1]);
+        moveRelative(1);
       }
       return;
     }
-    if (key === "arrowleft" && currentIndex > 0) {
+    if (key === "arrowleft" && (scope === "review" ? source.length > 1 : currentIndex > 0)) {
       event.preventDefault();
-      moveTo(source[currentIndex - 1]);
-    } else if (key === "arrowright" && currentIndex < source.length - 1) {
+      moveRelative(-1);
+    } else if (key === "arrowright" && (scope === "review" ? source.length > 1 : currentIndex < source.length - 1)) {
       event.preventDefault();
-      moveTo(source[currentIndex + 1]);
+      moveRelative(1);
     } else if (key === "n") {
       event.preventDefault();
       setNumberPage(Math.floor(currentIndex / NUMBER_PAGE_SIZE));
@@ -341,7 +357,7 @@ export default function Home() {
       {view === "practice" && current && <section className="study-view">
         <header className="page-head"><button onClick={() => setView(scope === "review" ? "wrong" : "home")}>← {scope === "review" ? "返回错题本" : "返回首页"}</button><span>{scope === "review" ? "错题复习" : "普通学习"} · {mode === "choice" ? "选择题" : "拼写题"}</span></header>
         <div className="study-progress"><i style={{ width: `${(currentIndex + 1) / Math.max(source.length, 1) * 100}%` }} /></div>
-        <div className="question-toolbar"><button title={mode === "spelling" ? "上一题（↑）" : "上一题（←）"} disabled={currentIndex === 0} onClick={() => moveTo(source[currentIndex - 1])}>← 上一题</button><button className="number-trigger" title="选择题号（N）" onClick={() => { setNumberPage(Math.floor(currentIndex / NUMBER_PAGE_SIZE)); setShowNumbers(true); }}>题号 {current.id} <small>/ {words.length}</small>⌄</button><button title={mode === "spelling" ? "下一题（↓）" : "下一题（→）"} disabled={currentIndex === source.length - 1} onClick={() => moveTo(source[currentIndex + 1])}>下一题 →</button></div>
+        <div className="question-toolbar"><button title={mode === "spelling" ? "上一题（↑）" : "上一题（←）"} disabled={scope === "review" ? source.length <= 1 : currentIndex === 0} onClick={() => moveRelative(-1)}>← 上一题</button><button className="number-trigger" title="选择题号（N）" onClick={() => { setNumberPage(Math.floor(currentIndex / NUMBER_PAGE_SIZE)); setShowNumbers(true); }}>题号 {current.id} <small>/ {words.length}</small>⌄</button><button title={mode === "spelling" ? "下一题（↓）" : "下一题（→）"} disabled={scope === "review" ? source.length <= 1 : currentIndex === source.length - 1} onClick={() => moveRelative(1)}>下一题 →</button></div>
         <article className="flashcard">
           <p className="prompt-label">{mode === "choice" ? "点击选项立即判断" : "输入英文后按 Enter 判断"}</p>
           <h2>{mode === "choice" ? current.word : current.meaning}</h2>
@@ -352,6 +368,8 @@ export default function Home() {
       </section>}
 
       {view === "wrong" && <section className="wrong-home"><header className="section-title"><div><p className="eyebrow">WRONG BOOK</p><h2>错题本</h2><p>选择题与拼写题分开复习；在复习中答对后移出对应错题本。</p></div></header><div className="wrong-mode-grid"><button disabled={!quiz.wrong.choice.length} onClick={() => startPractice("choice", "review")}><span>A?</span><div><h3>选择题复习</h3><p>{quiz.wrong.choice.length} 道错题</p></div><b>进入 →</b></button><button disabled={!quiz.wrong.spelling.length} onClick={() => startPractice("spelling", "review")}><span>中✎</span><div><h3>拼写题复习</h3><p>{quiz.wrong.spelling.length} 道错题</p></div><b>进入 →</b></button></div></section>}
+
+      {view === "review-complete" && <section className="review-complete"><span>✓</span><p className="eyebrow">REVIEW COMPLETE</p><h2>{completedMode === "choice" ? "选择题" : "拼写题"}错题已全部清空</h2><p>这一类错题已经全部答对，可以继续处理另一类错题。</p><div><button onClick={() => setView("wrong")}>返回错题本</button><button onClick={() => setView("home")}>返回首页</button></div></section>}
 
       {view === "words" && <section className="list-view"><header className="section-title"><div><p className="eyebrow">ALL WORDS</p><h2>单词列表</h2><p>共 {words.length} 个单词，支持中英文搜索。</p></div></header><div className="filters"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索英文或中文释义…" /></div><WordTable items={filteredWords.slice(0, 300)} quiz={quiz} /><p className="table-tip">{filteredWords.length > 300 ? `当前显示前 300 条（共 ${filteredWords.length} 条）` : `共 ${filteredWords.length} 条`}</p></section>}
 

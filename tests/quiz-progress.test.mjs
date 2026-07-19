@@ -5,6 +5,7 @@ import {
   dailyCompletedCount,
   emptyQuizStore,
   markDailyCorrect,
+  nextReviewItem,
   removeWrong,
 } from "../app/quiz-storage.ts";
 
@@ -16,6 +17,13 @@ test("daily progress counts a word only after both modes are correct", () => {
   assert.equal(dailyCompletedCount(store), 1);
   markDailyCorrect(store, "choice", "consistent");
   assert.equal(dailyCompletedCount(store), 1);
+});
+
+test("review navigation wraps remaining wrong items until the queue is empty", () => {
+  const items = ["one", "two", "three"];
+  assert.equal(nextReviewItem(items, 0), "two");
+  assert.equal(nextReviewItem(items, 2), "one");
+  assert.equal(nextReviewItem(["last"], 0), undefined);
 });
 
 test("choice and spelling wrong books remain isolated", () => {
