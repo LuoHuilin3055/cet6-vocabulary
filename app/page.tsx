@@ -266,7 +266,7 @@ export default function Home() {
   };
 
   const handleKeyboard = (event: React.KeyboardEvent<HTMLElement>) => {
-    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.ctrlKey || event.metaKey) return;
     const key = event.key.toLowerCase();
     if (showNumbers) {
       if (key === "escape") {
@@ -278,7 +278,7 @@ export default function Home() {
     if (view !== "practice") return;
     const target = event.target as HTMLElement;
     const typing = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT";
-    if (!typing && mode === "choice" && !record?.showAnswer && !record?.correct) {
+    if (!typing && !event.altKey && mode === "choice" && !record?.showAnswer && !record?.correct) {
       const letters = ["a", "b", "c", "d"];
       const optionIndex = /^[1-4]$/.test(key) ? Number(key) - 1 : letters.indexOf(key);
       if (optionIndex >= 0 && choiceOptions[optionIndex]) {
@@ -287,7 +287,16 @@ export default function Home() {
         return;
       }
     }
-    if (typing) return;
+    if (typing) {
+      if (mode === "spelling" && key === "arrowup" && currentIndex > 0) {
+        event.preventDefault();
+        moveTo(source[currentIndex - 1]);
+      } else if (mode === "spelling" && key === "arrowdown" && currentIndex < source.length - 1) {
+        event.preventDefault();
+        moveTo(source[currentIndex + 1]);
+      }
+      return;
+    }
     if (key === "arrowleft" && currentIndex > 0) {
       event.preventDefault();
       moveTo(source[currentIndex - 1]);
@@ -332,11 +341,11 @@ export default function Home() {
       {view === "practice" && current && <section className="study-view">
         <header className="page-head"><button onClick={() => setView(scope === "review" ? "wrong" : "home")}>← {scope === "review" ? "返回错题本" : "返回首页"}</button><span>{scope === "review" ? "错题复习" : "普通学习"} · {mode === "choice" ? "选择题" : "拼写题"}</span></header>
         <div className="study-progress"><i style={{ width: `${(currentIndex + 1) / Math.max(source.length, 1) * 100}%` }} /></div>
-        <div className="question-toolbar"><button title="上一题（←）" disabled={currentIndex === 0} onClick={() => moveTo(source[currentIndex - 1])}>← 上一题</button><button className="number-trigger" title="选择题号（N）" onClick={() => { setNumberPage(Math.floor(currentIndex / NUMBER_PAGE_SIZE)); setShowNumbers(true); }}>题号 {current.id} <small>/ {words.length}</small>⌄</button><button title="下一题（→）" disabled={currentIndex === source.length - 1} onClick={() => moveTo(source[currentIndex + 1])}>下一题 →</button></div>
+        <div className="question-toolbar"><button title={mode === "spelling" ? "上一题（↑）" : "上一题（←）"} disabled={currentIndex === 0} onClick={() => moveTo(source[currentIndex - 1])}>← 上一题</button><button className="number-trigger" title="选择题号（N）" onClick={() => { setNumberPage(Math.floor(currentIndex / NUMBER_PAGE_SIZE)); setShowNumbers(true); }}>题号 {current.id} <small>/ {words.length}</small>⌄</button><button title={mode === "spelling" ? "下一题（↓）" : "下一题（→）"} disabled={currentIndex === source.length - 1} onClick={() => moveTo(source[currentIndex + 1])}>下一题 →</button></div>
         <article className="flashcard">
           <p className="prompt-label">{mode === "choice" ? "点击选项立即判断" : "输入英文后按 Enter 判断"}</p>
           <h2>{mode === "choice" ? current.word : current.meaning}</h2>
-          {mode === "choice" ? <><div className="choice-grid">{choiceOptions.map((item, optionIndex) => <button key={item.word} disabled={Boolean(record?.showAnswer || record?.correct)} className={answerClass(item)} onClick={() => chooseAnswer(item)}><kbd>{String.fromCharCode(65 + optionIndex)}</kbd><span>{item.meaning}</span></button>)}</div><p className="keyboard-tip">键盘可按 A–D 或 1–4 作答</p></> : <><input className="spelling-input" disabled={Boolean(record?.correct)} value={spellingInput} onChange={(event) => setSpellingInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitSpelling()} placeholder={record?.showAnswer ? "再次按 Enter 重新拼写" : "输入英文单词"} autoComplete="off" autoCapitalize="none" spellCheck={false} /><p className="enter-tip">{record?.showAnswer ? "再次按 Enter 隐藏答案并重新作答" : "按 Enter 键判断正误"}</p></>}
+          {mode === "choice" ? <><div className="choice-grid">{choiceOptions.map((item, optionIndex) => <button key={item.word} disabled={Boolean(record?.showAnswer || record?.correct)} className={answerClass(item)} onClick={() => chooseAnswer(item)}><kbd>{String.fromCharCode(65 + optionIndex)}</kbd><span>{item.meaning}</span></button>)}</div><p className="keyboard-tip">键盘可按 A–D 或 1–4 作答</p></> : <><input className="spelling-input" disabled={Boolean(record?.correct)} value={spellingInput} onChange={(event) => setSpellingInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && submitSpelling()} placeholder={record?.showAnswer ? "再次按 Enter 重新拼写" : "输入英文单词"} autoComplete="off" autoCapitalize="none" spellCheck={false} /><p className="enter-tip">{record?.showAnswer ? "再次按 Enter 隐藏答案并重新作答" : "Enter 判题 · ↑ 上一题 · ↓ 下一题"}</p></>}
           {record?.showAnswer && <div className="answer-result incorrect"><strong>回答错误</strong><span>正确答案：{mode === "choice" ? current.meaning : current.word}</span>{mode === "choice" && scope === "review" && <button onClick={retryChoice}>重新作答</button>}</div>}
           {record?.correct && <div className={`saved-result ${record.everWrong ? "corrected" : "correct"}`}>{record.everWrong ? "曾答错，现已答对" : "回答正确"}</div>}
         </article>
