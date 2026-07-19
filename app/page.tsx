@@ -457,20 +457,11 @@ function StatisticsPage({ quiz, words, onReset }: { quiz: QuizStore; words: Word
   const wordStats = Object.values(quiz.statistics.words);
   const totals = wordStats.reduce((sum, item) => ({ answered: sum.answered + item.answered, correct: sum.correct + item.correct, wrong: sum.wrong + item.wrong }), { answered: 0, correct: 0, wrong: 0 });
   const correctPercent = totals.answered ? Math.round(totals.correct / totals.answered * 100) : 0;
-  const rangeSize = Math.max(1, Math.ceil(words.length / 10));
-  const ranges = Array.from({ length: Math.ceil(words.length / rangeSize) }, (_, rangeIndex) => {
-    const items = words.slice(rangeIndex * rangeSize, (rangeIndex + 1) * rangeSize);
-    const values = items.map((item) => quiz.statistics.questions[String(item.id)]).filter(Boolean);
-    const answered = values.reduce((sum, item) => sum + item.answered, 0);
-    const correct = values.reduce((sum, item) => sum + item.correct, 0);
-    return { label: `${rangeIndex * rangeSize + 1}-${Math.min((rangeIndex + 1) * rangeSize, words.length)}`, answered, accuracy: answered ? Math.round(correct / answered * 100) : 0 };
-  });
   const ranking = words.map((item) => ({ ...item, wrong: quiz.statistics.questions[String(item.id)]?.wrong || 0, answered: quiz.statistics.questions[String(item.id)]?.answered || 0 })).filter((item) => item.wrong).sort((a, b) => b.wrong - a.wrong || a.id - b.id).slice(0, 10);
 
   return <section className="stats-view"><header className="section-title"><div><p className="eyebrow">STATISTICS</p><h2>刷题统计</h2><p>统计数据从启用本页面后开始精确累计。</p></div><button className="reset-records" onClick={onReset}>重置刷题记录</button></header>
     <article className="stats-card"><h3>每日刷题数量</h3><div className="daily-chart" role="img" aria-label="最近七个有记录日期的刷题数量">{days.map(([date, value]) => <div className="daily-column" key={date}><span>{value.answered || ""}</span><i style={{ height: `${Math.max(value.answered ? 8 : 1, value.answered / maxDaily * 100)}%` }} /><small>{date.slice(5)}</small></div>)}</div></article>
     <article className="stats-card"><h3>正确 / 错误占比</h3><div className="ratio-layout"><div className="ratio-donut" style={{ "--correct": `${correctPercent * 3.6}deg` } as React.CSSProperties}><strong>{correctPercent}%</strong><small>正确率</small></div><div className="ratio-legend"><p><i className="correct" />正确 <b>{totals.correct}</b></p><p><i className="wrong" />错误 <b>{totals.wrong}</b></p><p>共作答 <b>{totals.answered}</b> 次</p></div></div></article>
-    <article className="stats-card range-card"><h3>题号区间正确率</h3><div className="range-chart" role="img" aria-label="各题号区间正确率">{ranges.map((range) => <div className={`range-row ${range.answered ? "" : "no-data"}`} key={range.label}><span>{range.label}</span><div><i style={{ width: `${range.accuracy}%` }} /></div><b>{range.answered ? `${range.accuracy}%` : "暂无数据"}</b></div>)}</div></article>
     <article className="stats-card"><h3>错题最多排行</h3>{ranking.length ? <div className="wrong-ranking">{ranking.map((item, index) => <div key={item.id}><b>{index + 1}</b><span><strong>{item.word}</strong><small>{item.meaning}</small></span><em>{item.wrong} 次错误</em></div>)}</div> : <div className="stats-empty">暂无错题统计，开始答题后会显示。</div>}</article>
   </section>;
 }
