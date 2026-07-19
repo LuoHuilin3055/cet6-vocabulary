@@ -13,6 +13,7 @@ import {
   QuizStore,
   removeWrong,
   saveQuizStore,
+  shouldRemoveSpellingWrong,
   todayKey,
 } from "./quiz-storage";
 
@@ -103,8 +104,9 @@ export default function Home() {
   const source = useMemo(() => {
     if (scope === "standard") return words;
     const wrong = new Set(quiz.wrong[mode]);
-    return words.filter((item) => wrong.has(item.word));
-  }, [words, quiz.wrong, mode, scope]);
+    const completed = mode === "spelling" ? new Set(quiz.spellingReview.completedThisRound) : new Set<string>();
+    return words.filter((item) => wrong.has(item.word) && !completed.has(item.word));
+  }, [words, quiz.wrong, quiz.spellingReview.completedThisRound, mode, scope]);
   const currentIndex = Math.max(0, source.findIndex((item) => item.id === currentId));
   const current = source[currentIndex];
   const record = current ? quiz.answers[scope][mode][current.word] : undefined;
@@ -126,9 +128,11 @@ export default function Home() {
   };
 
   const startPractice = (nextMode: QuizMode, nextScope: QuizScope) => {
+    const wrong = new Set(quiz.wrong[nextMode]);
+    const completed = nextMode === "spelling" ? new Set(quiz.spellingReview.completedThisRound) : new Set<string>();
     const available = nextScope === "standard"
       ? words
-      : words.filter((item) => new Set(quiz.wrong[nextMode]).has(item.word));
+      : words.filter((item) => wrong.has(item.word) && !completed.has(item.word));
     if (!available.length) return;
     if (nextScope === "review") {
       updateQuiz((next) => {
@@ -242,7 +246,16 @@ export default function Home() {
     const answer = spellingInput.trim();
     if (!answer) return;
     const correct = answer.toLowerCase() === current.word.toLowerCase();
-    const nextWord = scope === "review" ? nextReviewItem(source, currentIndex) : source[currentIndex + 1];
+    const passedRounds = quiz.spellingReview.passedRounds[current.word] || 0;
+    const removeOnCorrect = scope === "review" && shouldRemoveSpellingWrong(passedRounds, previous?.roundWrong || false);
+    const wrongAfter = removeOnCorrect ? quiz.wrong.spelling.filter((word) => word !== current.word) : quiz.wrong.spelling;
+    const remainingThisRound = correct && scope === "review"
+      ? [...source.slice(currentIndex + 1), ...source.slice(0, currentIndex)].filter((item) => item.word !== current.word)
+      : [];
+    const startsNewRound = correct && scope === "review" && !remainingThisRound.length && wrongAfter.length > 0;
+    const nextWord = scope === "standard"
+      ? source[currentIndex + 1]
+      : remainingThisRound[0] || (startsNewRound ? words.find((item) => wrongAfter.includes(item.word)) : undefined);
     updateQuiz((next) => {
       const old = next.answers[scope].spelling[current.word];
       next.answers[scope].spelling[current.word] = {
@@ -251,10 +264,26 @@ export default function Home() {
         everWrong: old?.everWrong || !correct,
         attempts: (old?.attempts || 0) + 1,
         showAnswer: !correct,
+        roundWrong: scope === "review" ? (old?.roundWrong || !correct) : old?.roundWrong,
       };
       if (!correct) addWrong(next, "spelling", current.word);
       if (correct && scope === "standard") markDailyCorrect(next, "spelling", current.word);
-      if (correct && scope === "review") removeWrong(next, "spelling", current.word);
+      if (correct && scope === "review") {
+        if (removeOnCorrect) {
+          removeWrong(next, "spelling", current.word);
+          delete next.spellingReview.passedRounds[current.word];
+        } else {
+          next.spellingReview.passedRounds[current.word] = passedRounds + 1;
+          if (!next.spellingReview.completedThisRound.includes(current.word)) next.spellingReview.completedThisRound.push(current.word);
+        }
+        if (startsNewRound) {
+          next.spellingReview.completedThisRound = [];
+          for (const word of wrongAfter) {
+            const saved = next.answers.review.spelling[word];
+            if (saved) next.answers.review.spelling[word] = { ...saved, userAnswer: "", correct: false, showAnswer: false, roundWrong: false };
+          }
+        }
+      }
       if (correct) next.positions[scope].spelling = nextWord?.id || 1;
     });
     if (correct) nextAfterCorrect(nextWord);

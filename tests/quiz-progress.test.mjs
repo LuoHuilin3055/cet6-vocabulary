@@ -7,6 +7,7 @@ import {
   markDailyCorrect,
   nextReviewItem,
   removeWrong,
+  shouldRemoveSpellingWrong,
 } from "../app/quiz-storage.ts";
 
 test("daily progress counts a word only after both modes are correct", () => {
@@ -24,6 +25,13 @@ test("review navigation wraps remaining wrong items until the queue is empty", (
   assert.equal(nextReviewItem(items, 0), "two");
   assert.equal(nextReviewItem(items, 2), "one");
   assert.equal(nextReviewItem(["last"], 0), undefined);
+});
+
+test("spelling wrongs leave only after a later round is correct on the first attempt", () => {
+  assert.equal(shouldRemoveSpellingWrong(0, false), false);
+  assert.equal(shouldRemoveSpellingWrong(1, true), false);
+  assert.equal(shouldRemoveSpellingWrong(1, false), true);
+  assert.equal(shouldRemoveSpellingWrong(3, true), false);
 });
 
 test("choice and spelling wrong books remain isolated", () => {

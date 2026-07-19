@@ -7,6 +7,7 @@ export type AnswerRecord = {
   everWrong: boolean;
   attempts: number;
   showAnswer: boolean;
+  roundWrong?: boolean;
 };
 
 type AnswerMap = Record<string, AnswerRecord>;
@@ -21,6 +22,10 @@ export type QuizStore = {
     date: string;
     choiceCorrect: string[];
     spellingCorrect: string[];
+  };
+  spellingReview: {
+    completedThisRound: string[];
+    passedRounds: Record<string, number>;
   };
 };
 
@@ -44,6 +49,7 @@ export function emptyQuizStore(): QuizStore {
       review: { choice: 1, spelling: 1 },
     },
     daily: { date: todayKey(), choiceCorrect: [], spellingCorrect: [] },
+    spellingReview: { completedThisRound: [], passedRounds: {} },
   };
 }
 
@@ -80,6 +86,7 @@ export function loadQuizStore(): QuizStore {
         },
       },
       daily: parsed.daily || fallback.daily,
+      spellingReview: parsed.spellingReview || fallback.spellingReview,
     };
     if (store.daily.date !== todayKey()) store.daily = fallback.daily;
     return store;
@@ -123,4 +130,8 @@ export function markDailyCorrect(store: QuizStore, mode: QuizMode, word: string)
 export function nextReviewItem<T>(items: T[], currentIndex: number) {
   if (items.length <= 1) return undefined;
   return items[(currentIndex + 1) % items.length];
+}
+
+export function shouldRemoveSpellingWrong(passedRounds: number, roundWrong: boolean) {
+  return passedRounds >= 1 && !roundWrong;
 }
