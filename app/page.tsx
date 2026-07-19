@@ -125,16 +125,25 @@ export default function Home() {
     saveQuizStore(next);
   };
 
-  const savePosition = (id: number) => {
-    setCurrentId(id);
-    updateQuiz((next) => { next.positions[scope][mode] = id; });
-  };
-
   const startPractice = (nextMode: QuizMode, nextScope: QuizScope) => {
     const available = nextScope === "standard"
       ? words
       : words.filter((item) => new Set(quiz.wrong[nextMode]).has(item.word));
     if (!available.length) return;
+    if (nextScope === "review") {
+      updateQuiz((next) => {
+        for (const item of available) {
+          const previous = next.answers.review[nextMode][item.word];
+          if (previous && !previous.correct) {
+            next.answers.review[nextMode][item.word] = {
+              ...previous,
+              userAnswer: "",
+              showAnswer: false,
+            };
+          }
+        }
+      });
+    }
     const savedId = quiz.positions[nextScope][nextMode];
     const id = available.some((item) => item.id === savedId) ? savedId : available[0].id;
     setMode(nextMode);
@@ -147,7 +156,16 @@ export default function Home() {
 
   const moveTo = (item?: Word) => {
     if (!item) return;
-    savePosition(item.id);
+    setCurrentId(item.id);
+    updateQuiz((next) => {
+      if (scope === "review" && current && current.id !== item.id) {
+        const previous = next.answers.review[mode][current.word];
+        if (previous && !previous.correct) {
+          next.answers.review[mode][current.word] = { ...previous, userAnswer: "", showAnswer: false };
+        }
+      }
+      next.positions[scope][mode] = item.id;
+    });
     setShowNumbers(false);
   };
 
